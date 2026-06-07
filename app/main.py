@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings, warn_missing_keys
 from app.models import Session
 from app.storage import Storage
-from app.scenarios.ordering import load_menu_or_default, build_system_prompt
+from app.scenarios.registry import SCENARIOS
 from app.services.dialogue import DialogueService
 from app.services.analysis import analyze_turn, build_summary
 from app.services.timing import StepTimer, aggregate_timings
@@ -22,15 +22,11 @@ from app.services.tts import TtsService
 from app.services.pron import PronService
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
-MENU_PATH = os.path.join("resources", "menu.json")
-OPENING_LINE = "Welcome! What can I get for you today?"
 
 # Pre-generated greeting audio keyed by session_id; popped on first use or session end.
 _greeting_cache: dict[str, bytes] = {}
 
 # Per-session pending hints from side-chain analysis.
-# Populated by _bg_analyze when a serious grammar error is detected;
-# consumed (and cleared) at the start of the next user turn.
 _pending_hints: dict[str, str] = {}
 
 
@@ -54,12 +50,13 @@ def default_services() -> Services:
 def create_app(services: Services | None = None) -> FastAPI:
     services = services or default_services()
     storage = Storage(db_path=services.db_path, audio_dir=services.audio_dir)
-    menu = load_menu_or_default(MENU_PATH)  # 文件缺失时回退内置菜单,新检出也能用
-    # Pre-compute system prompts for each difficulty level.
-    system_prompts = {d: build_system_prompt(menu, difficulty=d)
-                      for d in ("beginner", "intermediate", "advanced")}
-    dialogue = DialogueService(llm=services.llm, storage=storage,
-                               system_prompt=system_prompts["beginner"])
+    # Pre-compute system prompts for all scenarios × all difficulty levels
+    _prompts: dict[str, dict[str, str]] = {
+        sid: {d: sc.build_prompt(d) for d in ("beginner", "intermediate", "advanced")}
+        for sid, sc in SCENARIOS.items()
+    }
+    default_prompt = _prompts["ordering"]["beginner"]
+    dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=default_prompt)
 
     app = FastAPI()
     if os.path.isdir(FRONTEND_DIR):
@@ -81,27 +78,43 @@ def create_app(services: Services | None = None) -> FastAPI:
             },
         }
 
+    @app.get("/api/scenarios")
+    def list_scenarios():
+        return [
+            {"id": s.id, "name": s.display_name, "description": s.description,
+             "opening_line": s.opening_line}
+            for s in SCENARIOS.values()
+        ]
+
     @app.get("/api/menu")
     def get_menu():
-        return [m.__dict__ for m in menu]
+        ordering = SCENARIOS.get("ordering")
+        if ordering and ordering.props:
+            lines = [ln.lstrip("- ") for ln in ordering.props[0].detail.splitlines() if ln.strip()]
+            return [{"item": ln} for ln in lines]
+        return []
 
     @app.get("/api/sessions")
     def list_sessions(limit: int = 50):
         return storage.list_sessions(limit=limit)
 
     @app.post("/api/session")
-    async def create_session(background_tasks: BackgroundTasks,
-                             dialect: str = Query(default="en-us",
-                                                  pattern="^(en-us|en-gb)$"),
-                             difficulty: str = Query(
-                                 default="beginner",
-                                 pattern="^(beginner|intermediate|advanced)$")):
+    async def create_session(
+        background_tasks: BackgroundTasks,
+        scenario: str = Query(default="ordering"),
+        dialect: str = Query(default="en-us", pattern="^(en-us|en-gb)$"),
+        difficulty: str = Query(default="beginner",
+                                pattern="^(beginner|intermediate|advanced)$"),
+    ):
+        if scenario not in SCENARIOS:
+            return JSONResponse({"error": f"Unknown scenario: {scenario}"}, status_code=422)
         sid = uuid.uuid4().hex[:12]
-        storage.save_session(Session(id=sid, scenario="ordering",
+        storage.save_session(Session(id=sid, scenario=scenario,
                                      dialect=dialect, difficulty=difficulty,
                                      created_at=time.time()))
-        background_tasks.add_task(_pregenerate_greeting, sid, services)
-        return {"id": sid, "dialect": dialect, "difficulty": difficulty}
+        background_tasks.add_task(_pregenerate_greeting, sid, services, scenario)
+        return {"id": sid, "scenario": scenario, "dialect": dialect, "difficulty": difficulty,
+                "opening_line": SCENARIOS[scenario].opening_line}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
@@ -117,20 +130,17 @@ def create_app(services: Services | None = None) -> FastAPI:
                     continue
 
                 user_text = (data.get("text") or "").strip()
-                # Consume any pending hint injected by the previous turn's side-chain analysis.
                 inline_hint = _pending_hints.pop(session_id, None)
                 is_first_turn = len(session.turns) == 0
                 timer = StepTimer()
-                # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
-                # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
                 from app.services.tts import get_voice_for_dialect
                 voice = get_voice_for_dialect(session.dialect)
-                sp = system_prompts.get(session.difficulty, system_prompts["beginner"])
+                sp = _prompts.get(session.scenario, _prompts["ordering"]).get(
+                    session.difficulty, default_prompt)
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,
                         inline_hint=inline_hint, system_prompt=sp)
-                    # First turn: serve pre-generated greeting if available (skip TTS latency).
                     if is_first_turn and session_id in _greeting_cache:
                         audio = _greeting_cache.pop(session_id)
                     else:
@@ -138,29 +148,24 @@ def create_app(services: Services | None = None) -> FastAPI:
                             audio = await asyncio.to_thread(
                                 services.tts.synthesize, turn.assistant_text, voice)
 
-                # 落盘音频 + 计时回填
                 turn.assistant_audio_path = storage.save_audio(
                     session_id, turn.id + "_tts", audio, suffix=".mp3")
                 turn.timings.tts_ms = timer.results.get("tts")
-                turn.timings.stt_ms = data.get("stt_ms")  # 浏览器上报
+                turn.timings.stt_ms = data.get("stt_ms")
                 turn.timings.total_ms = timer.results.get("total")
 
-                # 用户音频落盘 + 后台副链路分析(不阻塞回包)
                 wav_bytes = None
                 audio_b64_in = data.get("audio_b64")
                 if audio_b64_in:
                     raw = base64.b64decode(audio_b64_in)
                     turn.user_audio_path = storage.save_audio(
                         session_id, turn.id + "_user", raw, suffix=".webm")
-                    # 浏览器 MediaRecorder 出的是 webm/opus,SpeechAce 要 16k wav,必须转码。
-                    # 转码失败(空/损坏音频,如测试桩)则跳过本轮发音测评。
                     try:
                         wav_bytes = to_wav_16k(raw, "webm")
                     except Exception:  # noqa: BLE001
                         wav_bytes = None
                 storage.save_turn(turn)
 
-                # 后台异步分析(发音 + 纠错),不阻塞回包
                 asyncio.create_task(
                     _bg_analyze(turn, wav_bytes, services, storage,
                                 dialect=session.dialect))
@@ -172,10 +177,10 @@ def create_app(services: Services | None = None) -> FastAPI:
                     "goal_reached": turn.goal_reached,
                     "timings": turn.timings.model_dump(),
                 })
-        except Exception:  # noqa: BLE001 — 客户端断开等,直接结束连接
+        except Exception:  # noqa: BLE001
             pass
         finally:
-            _pending_hints.pop(session_id, None)  # 断线时清理，防止内存泄漏
+            _pending_hints.pop(session_id, None)
             _greeting_cache.pop(session_id, None)
 
     @app.post("/api/session/{session_id}/finish")
@@ -186,7 +191,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         session.status = "completed"
         session.completed_at = time.time()
         storage.save_session(session)
-        _pending_hints.pop(session_id, None)  # 会话正常结束时清理
+        _pending_hints.pop(session_id, None)
         _greeting_cache.pop(session_id, None)
         summary = build_summary(session, llm=services.llm)
         storage.save_summary(summary)
@@ -198,13 +203,6 @@ def create_app(services: Services | None = None) -> FastAPI:
         if summary is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         return summary.model_dump()
-
-    @app.get("/api/session/{session_id}/status")
-    def get_session_status(session_id: str):
-        status = storage.get_session_status(session_id)
-        if status is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        return status
 
     @app.get("/api/session/{session_id}/timing")
     def get_timing(session_id: str):
@@ -220,12 +218,18 @@ def create_app(services: Services | None = None) -> FastAPI:
             return JSONResponse({"error": "not found"}, status_code=404)
         return [t.model_dump() for t in session.turns]
 
+    @app.get("/api/session/{session_id}/status")
+    def get_session_status(session_id: str):
+        status = storage.get_session_status(session_id)
+        if status is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return status
+
     @app.get("/api/session/{session_id}/weak-words")
     def get_weak_words(session_id: str, n: int = 5):
         session = storage.get_session(session_id)
         if session is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        # Aggregate word scores across turns: average score per unique word.
         totals: dict[str, list[float]] = {}
         for turn in session.turns:
             if turn.pronunciation:
@@ -242,29 +246,30 @@ def create_app(services: Services | None = None) -> FastAPI:
     return app
 
 
-async def _pregenerate_greeting(session_id: str, services: Services) -> None:
-    """Synthesize the fixed opening line in the background and cache the audio bytes."""
+async def _pregenerate_greeting(session_id: str, services: Services,
+                                scenario: str = "ordering") -> None:
+    """Synthesize the scenario opening line in the background and cache the audio bytes."""
     try:
-        audio = await asyncio.to_thread(services.tts.synthesize, OPENING_LINE)
+        sc = SCENARIOS.get(scenario)
+        opening = sc.opening_line if sc else "Hello! How can I help you?"
+        audio = await asyncio.to_thread(services.tts.synthesize, opening)
         _greeting_cache[session_id] = audio
     except Exception:  # noqa: BLE001
-        pass  # cache miss is safe; ws_turn falls back to normal TTS
+        pass
 
 
 async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage,
                       dialect: str = "en-us"):
-    # analyze_turn 内含同步发音/纠错 HTTP 调用,丢到 worker 线程避免阻塞 event loop
     serious = await asyncio.to_thread(
         analyze_turn, turn, wav_bytes, services.pron, services.llm, storage,
         dialect=dialect)
 
     if serious:
-        # Build a coaching hint for the LLM (instructs the assistant, not the user directly).
         parts = [
             f'用户说了"{c.original}"，语法问题：{c.explanation}（建议改为"{c.suggestion}"）'
             for c in serious
         ]
-        hint = "；".join(parts) + "。请在本轮回复中用自然方式轻轻点出，随后继续推进点餐流程。"
+        hint = "；".join(parts) + "。请在本轮回复中用自然方式轻轻点出，随后继续推进对话流程。"
         _pending_hints[turn.session_id] = hint
 
 

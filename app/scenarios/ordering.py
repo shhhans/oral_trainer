@@ -3,6 +3,7 @@ goal_reached 由 LLM 在用户确认下单后判定(prompt 里定义目标)。""
 import json
 import os
 from dataclasses import dataclass
+from app.scenarios.base import ScenarioConfig, ScenarioProp
 
 
 @dataclass(frozen=True)
@@ -35,48 +36,42 @@ def load_menu_or_default(path: str) -> list[MenuItem]:
     return load_menu(path) if os.path.exists(path) else list(DEFAULT_MENU)
 
 
-_DIFFICULTY_NOTES = {
-    "beginner": (
-        "The customer is a beginner English learner. "
-        "Speak slowly and use simple vocabulary. "
-        "Repeat the order back to confirm each item. "
-        "If the customer seems confused, rephrase in simpler words."
-    ),
-    "intermediate": (
-        "The customer has intermediate English. "
-        "Use natural conversational pace. "
-        "Ask friendly follow-up questions (size, drink, any sides?)."
-    ),
-    "advanced": (
-        "The customer is an advanced English learner. "
-        "Use natural restaurant vocabulary (specials, sides, substitutions, allergies). "
-        "Speak at a brisk pace. "
-        "Ask about preferences, dietary restrictions, and upsell naturally."
-    ),
-}
-
-
-def build_system_prompt(items: list[MenuItem], difficulty: str = "beginner") -> str:
+def build_system_prompt(items: list[MenuItem]) -> str:
     menu_lines = "\n".join(f"- {i.name} ({i.price}): {i.desc}" for i in items)
-    difficulty_note = _DIFFICULTY_NOTES.get(difficulty, _DIFFICULTY_NOTES["beginner"])
     return (
-        "You are a friendly, patient restaurant waiter/server. "
-        f"{difficulty_note} "
-        "Speak natural, simple English. Keep replies short (1-2 sentences).\n\n"
-        "## Your top priority: keep the conversation moving\n"
-        "- Always respond as a real waiter would — acknowledge what the customer said "
-        "and gently guide the conversation toward completing their order.\n"
-        "- If the customer's meaning is clear, accept it and move on, even if the English "
-        "is imperfect. Minor grammar issues do NOT interrupt the ordering flow.\n"
-        "- Only set inline_correction (in your JSON) if the customer's phrasing would "
-        "genuinely cause confusion in a real restaurant (e.g., completely wrong item name, "
-        "contradictory request, or a phrase no native speaker would understand). "
-        "Never correct minor grammar, tense, or article mistakes mid-conversation.\n"
-        "- Language feedback for smaller mistakes will be given at the end of the session — "
-        "your job is to complete the order naturally.\n\n"
-        "## Menu\n"
-        f"{menu_lines}\n\n"
-        "## Goal\n"
-        "Guide the customer until they confirm a complete order (at least one dish and "
-        "they indicate they are done). When the order is confirmed, set goal_reached=true "
-        "and close warmly (e.g., 'Great, I'll put that in for you!')."    )
+        "You are a friendly restaurant waiter/server. Speak natural, simple English. "
+        "Keep replies short (1-2 sentences) so the conversation flows. "
+        "Help the customer order from this menu:\n"
+        f"{menu_lines}\n"
+        "Goal: guide the customer until they have confirmed a complete order "
+        "(at least one dish, and they say they're done). "
+        "When the order is confirmed and complete, set goal_reached=true and warmly close."
+    )
+
+
+def _build_ordering_scenario(items: list[MenuItem]) -> ScenarioConfig:
+    menu_lines = "\n".join(f"- {i.name} ({i.price}): {i.desc}" for i in items)
+    return ScenarioConfig(
+        id="ordering",
+        display_name="Restaurant Ordering",
+        description="Order food at a restaurant — practice menu vocabulary, making requests, and polite conversation.",
+        opening_line="Welcome! My name is Alex and I'll be your server today. Can I start you off with something to drink?",
+        goal_description="guide the customer until they have confirmed a complete order (at least one item) and said they're done",
+        props=[ScenarioProp("Menu", menu_lines)],
+        base_role="You are a friendly restaurant waiter/server.",
+        difficulty_notes={
+            "beginner": "Use simple food vocabulary. Offer suggestions. Confirm each item clearly.",
+            "intermediate": "Describe specials, handle substitutions, upsell dessert/drinks naturally.",
+            "advanced": "Handle dietary restrictions, split checks, complaints about wait time.",
+        },
+    )
+
+
+SCENARIO: ScenarioConfig | None = None  # populated by load_ordering_scenario()
+
+
+def load_ordering_scenario(path: str = "") -> ScenarioConfig:
+    global SCENARIO
+    items = load_menu_or_default(path) if path else list(DEFAULT_MENU)
+    SCENARIO = _build_ordering_scenario(items)
+    return SCENARIO
