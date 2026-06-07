@@ -2,7 +2,9 @@
 Services 容器集中持有依赖,测试可整体替换为 fake。"""
 import asyncio
 import base64
+import json
 import os
+import queue
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from app.services.audio import to_wav_16k
 from app.services.llm import LlmService
 from app.services.tts import TtsService
 from app.services.pron import PronService
+from app.services.stt import DashscopeStreamingSession
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
@@ -34,6 +37,8 @@ class Services:
     pron: object
     db_path: str
     audio_dir: str
+    # ASR 识别器工厂:注入以便测试用 fake 替换真实 DashScope SDK。None = 用真实实现。
+    asr_factory: object = None
 
 
 def default_services() -> Services:
@@ -72,6 +77,8 @@ def create_app(services: Services | None = None) -> FastAPI:
             "keys_configured": {
                 "minimax": bool(s.minimax_api_key and s.minimax_group_id),
                 "speechace": bool(s.speechace_api_key),
+                # 前端据此决定走服务端实时 ASR 还是回退浏览器 Web Speech
+                "dashscope": bool(s.dashscope_api_key),
             },
         }
 
@@ -170,6 +177,48 @@ def create_app(services: Services | None = None) -> FastAPI:
             pass
         finally:
             _pending_hints.pop(session_id, None)
+
+    @app.websocket("/ws/asr/{session_id}")
+    async def ws_asr(ws: WebSocket, session_id: str):
+        """实时 ASR 链路:浏览器流式上传 PCM16/16k,后端喂给 DashScope,回传 partial/final。
+        未配 DASHSCOPE_API_KEY 时回 unavailable,前端据此回退浏览器 Web Speech。"""
+        await ws.accept()
+        if not get_settings().dashscope_api_key:
+            await ws.send_json({"type": "unavailable"})
+            await ws.close()
+            return
+
+        # partial 在 SDK 线程产生,放进线程安全队列,由 async 侧统一回传,避免跨线程 asyncio 调度。
+        partials: queue.Queue = queue.Queue()
+        sess = DashscopeStreamingSession(
+            on_partial=partials.put, recognizer_factory=services.asr_factory)
+
+        async def drain_partials():
+            while not partials.empty():
+                await ws.send_json({"type": "partial", "text": partials.get()})
+
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg.get("bytes") is not None:
+                    await asyncio.to_thread(sess.feed, msg["bytes"])
+                    await drain_partials()
+                elif msg.get("text"):
+                    data = json.loads(msg["text"])
+                    if data.get("type") == "stop":
+                        result = await asyncio.to_thread(sess.final)
+                        await drain_partials()
+                        await ws.send_json({"type": "final", "text": result.text})
+                        break
+        except Exception:  # noqa: BLE001
+            # 客户端断开或识别异常:静默结束本次会话,前端按需回退/重试
+            pass
+        finally:
+            await asyncio.to_thread(sess.final)  # 幂等,确保识别器释放
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     @app.post("/api/session/{session_id}/finish")
     def finish(session_id: str):
