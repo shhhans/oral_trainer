@@ -29,6 +29,11 @@ DEFAULT_OPENING_AUDIO_URL = "/static/audio/ordering-opening-en-us.mp3"
 
 # Per-session pending hints from side-chain analysis.
 _pending_hints: dict[str, str] = {}
+HEARTBEAT_FOLLOWUPS = (
+    "Are you still there? Take your time.",
+    "Would you like me to repeat the question?",
+    "Whenever you're ready, what would you like to say?",
+)
 
 
 @dataclass
@@ -137,18 +142,37 @@ def create_app(services: Services | None = None) -> FastAPI:
         try:
             while True:
                 data = await ws.receive_json()
-                if data.get("type") != "turn":
+                message_type = data.get("type")
+                if message_type not in {"turn", "heartbeat"}:
                     continue
                 session = storage.get_session(session_id)
                 if session is None:
                     await ws.send_json({"error": "session not found"})
                     continue
 
+                from app.services.tts import get_voice_for_dialect
+                voice = get_voice_for_dialect(session.dialect)
+                if message_type == "heartbeat":
+                    raw_sequence = data.get("sequence")
+                    followup_index = raw_sequence if isinstance(raw_sequence, int) else 0
+                    followup = HEARTBEAT_FOLLOWUPS[
+                        followup_index % len(HEARTBEAT_FOLLOWUPS)
+                    ]
+                    try:
+                        audio = await asyncio.to_thread(
+                            services.tts.synthesize, followup, voice)
+                    except Exception:  # noqa: BLE001
+                        audio = b""
+                    await ws.send_json({
+                        "type": "heartbeat",
+                        "assistant_text": followup,
+                        "audio_b64": base64.b64encode(audio).decode() if audio else "",
+                    })
+                    continue
+
                 user_text = (data.get("text") or "").strip()
                 inline_hint = _pending_hints.pop(session_id, None)
                 timer = StepTimer()
-                from app.services.tts import get_voice_for_dialect
-                voice = get_voice_for_dialect(session.dialect)
                 sp = _prompts.get(session.scenario, _prompts["ordering"]).get(
                     session.difficulty, default_prompt)
                 with timer.measure("total"):
@@ -164,6 +188,12 @@ def create_app(services: Services | None = None) -> FastAPI:
                     session_id, turn.id + "_tts", audio, suffix=".mp3")
                 turn.timings.tts_ms = timer.results.get("tts")
                 turn.timings.stt_ms = data.get("stt_ms")
+                raw_wait_ms = data.get("response_wait_ms")
+                if isinstance(raw_wait_ms, (int, float)) and not isinstance(raw_wait_ms, bool):
+                    turn.timings.response_wait_ms = min(
+                        max(float(raw_wait_ms), 0.0),
+                        3_600_000.0,
+                    )
                 turn.timings.total_ms = timer.results.get("total")
 
                 wav_bytes = None

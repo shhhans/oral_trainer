@@ -24,6 +24,7 @@ class Correction(BaseModel):
 
 class Timings(BaseModel):
     stt_ms: float | None = None   # 浏览器端上报
+    response_wait_ms: float | None = None
     llm_ms: float | None = None
     tts_ms: float | None = None
     total_ms: float | None = None
@@ -59,6 +60,7 @@ class SubScores(BaseModel):
     pronunciation: float
     fluency: float
     grammar: float
+    responsiveness: float = 100.0
 
 
 class TimingBreakdown(BaseModel):
@@ -76,6 +78,7 @@ class Summary(BaseModel):
     word_scores: list[WordScore] = Field(default_factory=list)
     correction_list: list[Correction] = Field(default_factory=list)
     timing_breakdown: TimingBreakdown
+    response_wait_total_ms: float = 0.0
     llm_comment: str = ""
 
 

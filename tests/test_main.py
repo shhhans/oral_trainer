@@ -151,6 +151,90 @@ def test_first_turn_audio_matches_reply_text(tmp_path):
     assert base64.b64decode(msg["audio_b64"]) == b"TTS:" + msg["assistant_text"].encode()
 
 
+def test_websocket_heartbeat_repeats_followups_without_creating_turns(tmp_path):
+    synthesized = []
+
+    class RecordingTts:
+        def synthesize(self, text, voice="x"):
+            synthesized.append(text)
+            return b"FOLLOWUP"
+
+    services = Services(llm=FakeLlm(), tts=RecordingTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"),
+                        audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
+    sid = client.post("/api/session").json()["id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "heartbeat", "sequence": 0})
+        first = ws.receive_json()
+        ws.send_json({"type": "heartbeat", "sequence": 1})
+        second = ws.receive_json()
+
+    assert first["type"] == "heartbeat"
+    assert second["type"] == "heartbeat"
+    assert first["assistant_text"] != second["assistant_text"]
+    assert base64.b64decode(first["audio_b64"]) == b"FOLLOWUP"
+    assert client.get(f"/api/session/{sid}/turns").json() == []
+
+
+def test_websocket_heartbeat_falls_back_to_text_when_tts_fails(tmp_path):
+    class FailingTts:
+        def synthesize(self, text, voice="x"):
+            raise RuntimeError("tts unavailable")
+
+    services = Services(llm=FakeLlm(), tts=FailingTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"),
+                        audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
+    sid = client.post("/api/session").json()["id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "heartbeat", "sequence": 0})
+        message = ws.receive_json()
+
+    assert message["type"] == "heartbeat"
+    assert message["assistant_text"]
+    assert message["audio_b64"] == ""
+
+
+def test_turn_persists_response_wait_for_summary(tmp_path):
+    client = make_client(tmp_path)
+    sid = client.post("/api/session").json()["id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({
+            "type": "turn",
+            "text": "I want tea",
+            "audio_b64": "",
+            "response_wait_ms": 12000,
+        })
+        ws.receive_json()
+
+    turn = client.get(f"/api/session/{sid}/turns").json()[0]
+    assert turn["timings"]["response_wait_ms"] == 12000
+    summary = client.post(f"/api/session/{sid}/finish").json()
+    assert summary["response_wait_total_ms"] == 12000
+    assert summary["sub_scores"]["responsiveness"] == 40
+
+
+def test_turn_ignores_invalid_response_wait(tmp_path):
+    client = make_client(tmp_path)
+    sid = client.post("/api/session").json()["id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({
+            "type": "turn",
+            "text": "I want tea",
+            "audio_b64": "",
+            "response_wait_ms": "invalid",
+        })
+        ws.receive_json()
+
+    turn = client.get(f"/api/session/{sid}/turns").json()[0]
+    assert turn["timings"]["response_wait_ms"] is None
+
+
 def test_turns_endpoint_returns_turn_list(tmp_path):
     client = make_client(tmp_path)
     sid = client.post("/api/session").json()["id"]

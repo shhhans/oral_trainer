@@ -10,6 +10,7 @@ def test_turn_defaults():
     assert t.deferred_corrections == []
     assert t.goal_reached is False
     assert t.timings.total_ms is None
+    assert t.timings.response_wait_ms is None
 
 
 def test_llm_reply_parses_optional_correction():

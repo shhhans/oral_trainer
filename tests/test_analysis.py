@@ -1,6 +1,10 @@
 import time
 from app.models import (Session, Turn, Pronunciation, WordScore, Correction, Timings)
-from app.services.analysis import build_summary, grammar_score_from_corrections
+from app.services.analysis import (
+    build_summary,
+    grammar_score_from_corrections,
+    responsiveness_score,
+)
 
 
 class FakeLlm:
@@ -30,17 +34,36 @@ def test_grammar_score_decreases_with_errors():
     assert grammar_score_from_corrections(2) < 100
 
 
+def test_responsiveness_score_uses_average_wait():
+    assert responsiveness_score([]) == 100
+    assert responsiveness_score([5000, 15000]) == 50
+    assert responsiveness_score([30000]) == 0
+
+
 def test_build_summary_aggregates():
     s = make_session_with_turns()
     summary = build_summary(s, llm=FakeLlm())
     assert summary.session_id == "s1"
     assert summary.sub_scores.pronunciation == 80   # (90+70)/2
     assert summary.sub_scores.fluency == 70         # (80+60)/2
+    assert summary.sub_scores.responsiveness == 100
     assert len(summary.word_scores) == 2
     assert len(summary.correction_list) == 1
     assert summary.timing_breakdown.samples == 2
     assert 0 <= summary.overall_score <= 100
     assert summary.llm_comment == "总评"
+
+
+def test_build_summary_includes_response_wait_in_score():
+    s = make_session_with_turns()
+    s.turns[0].timings.response_wait_ms = 5000
+    s.turns[1].timings.response_wait_ms = 15000
+
+    summary = build_summary(s, llm=FakeLlm())
+
+    assert summary.response_wait_total_ms == 20000
+    assert summary.sub_scores.responsiveness == 50
+    assert summary.overall_score < 80
 
 
 def test_build_summary_no_pronunciation_uses_grammar_only():

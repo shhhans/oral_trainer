@@ -9,6 +9,14 @@ def grammar_score_from_corrections(avg_corrections: float) -> float:
     return max(0.0, 100.0 - 8.0 * avg_corrections)
 
 
+def responsiveness_score(wait_ms: list[float]) -> float:
+    """平均每等待 1 秒扣 5 分。无等待数据时不扣分。"""
+    if not wait_ms:
+        return 100.0
+    average_seconds = sum(wait_ms) / len(wait_ms) / 1000
+    return round(max(0.0, 100.0 - average_seconds * 5.0), 1)
+
+
 def analyze_turn(turn: Turn, wav_bytes: bytes | None, pron, llm, storage,
                  dialect: str = "en-us") -> list:
     """异步:发音测评 + 纠错，回填并存回。返回 serious_corrections 供主链路注入。
@@ -44,6 +52,13 @@ def build_summary(session: Session, llm) -> Summary:
                                           suggestion="", explanation=t.inline_correction))
     avg_corr = len(corrections) / len(turns) if turns else 0.0
     grammar = grammar_score_from_corrections(avg_corr)
+    response_wait = [
+        t.timings.response_wait_ms
+        for t in turns
+        if t.timings.response_wait_ms is not None
+    ]
+    responsiveness = responsiveness_score(response_wait)
+    response_wait_total_ms = round(sum(response_wait), 1)
 
     word_scores: list[WordScore] = []
     for t in turns:
@@ -54,22 +69,35 @@ def build_summary(session: Session, llm) -> Summary:
     # to avoid unfairly zeroing the score (e.g. browser STT unavailable).
     has_pron = any(t.pronunciation for t in turns)
     if has_pron:
-        overall = round(0.5 * pron_overall + 0.3 * fluency + 0.2 * grammar, 1)
+        overall = round(
+            0.45 * pron_overall
+            + 0.25 * fluency
+            + 0.2 * grammar
+            + 0.1 * responsiveness,
+            1,
+        )
     else:
-        overall = grammar
+        overall = round(0.8 * grammar + 0.2 * responsiveness, 1)
 
     weak = []
     if has_pron and pron_overall < 75: weak.append("发音")
     if has_pron and fluency < 75: weak.append("流利度")
     if grammar < 75: weak.append("语法")
+    if responsiveness < 75: weak.append("反应速度")
     comment = llm.summarize_comment(overall=overall, weak_points=weak)
 
     return Summary(
         session_id=session.id,
         overall_score=overall,
-        sub_scores=SubScores(pronunciation=pron_overall, fluency=fluency, grammar=grammar),
+        sub_scores=SubScores(
+            pronunciation=pron_overall,
+            fluency=fluency,
+            grammar=grammar,
+            responsiveness=responsiveness,
+        ),
         word_scores=word_scores,
         correction_list=corrections,
         timing_breakdown=aggregate_timings(turns),
+        response_wait_total_ms=response_wait_total_ms,
         llm_comment=comment,
     )

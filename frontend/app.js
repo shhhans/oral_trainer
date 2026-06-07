@@ -307,6 +307,8 @@ probeAsrCapability();
 // Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
 // 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
 let audioPlayer = null, audioPrimePromise = null, lastAudioSource = null;
+let idleTimer = null, idleStartedAt = null, responseWaitMs = 0;
+let heartbeatSequence = 0, waitingForUser = false;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -338,6 +340,7 @@ function initPicker() {
 
 async function startScenario(scenarioId) {
   primeAudio();
+  resetIdleTracking();
   currentScenario = SCENARIO_DEFS[scenarioId];
 
   // Create session on server
@@ -367,8 +370,10 @@ async function startScenario(scenarioId) {
   // Show opening line as first message
   const openingLine = data.opening_line || '';
   if (openingLine) addMessage(openingLine, 'opening');
-  if (data.opening_audio_url) playAudioSource(data.opening_audio_url);
-  else if (data.opening_audio_b64) playAudio(data.opening_audio_b64);
+  let openingPlayback = Promise.resolve();
+  if (data.opening_audio_url) openingPlayback = playAudioSource(data.opening_audio_url);
+  else if (data.opening_audio_b64) openingPlayback = playAudio(data.opening_audio_b64);
+  openingPlayback.finally(scheduleIdleFollowup);
 
   // Switch views
   document.getElementById('picker').classList.add('hidden');
@@ -403,6 +408,42 @@ function ensureWsOpen(timeoutMs = 4000) {
     ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
     ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('ws error')); }, { once: true });
   });
+}
+
+function clearIdleTimer(addElapsed = false) {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+  if (addElapsed && idleStartedAt !== null) {
+    responseWaitMs += performance.now() - idleStartedAt;
+  }
+  idleStartedAt = null;
+}
+
+function resetIdleTracking() {
+  clearIdleTimer();
+  responseWaitMs = 0;
+  heartbeatSequence = 0;
+  waitingForUser = false;
+}
+
+function scheduleIdleFollowup() {
+  clearIdleTimer();
+  if (!sessionId || recording) return;
+  waitingForUser = true;
+  idleStartedAt = performance.now();
+  idleTimer = setTimeout(sendIdleFollowup, 5000);
+}
+
+async function sendIdleFollowup() {
+  clearIdleTimer(true);
+  if (!waitingForUser || !sessionId) return;
+  try {
+    await ensureWsOpen();
+    if (!waitingForUser) return;
+    ws.send(JSON.stringify({ type: 'heartbeat', sequence: heartbeatSequence }));
+  } catch {
+    if (waitingForUser) scheduleIdleFollowup();
+  }
 }
 
 // ── Gap-fill interaction ────────────────────────────────────────────────────────
@@ -488,6 +529,8 @@ document.addEventListener('keyup', e => {
 
 async function startRec() {
   if (recording || !ws || !sessionId) return;
+  clearIdleTimer(true);
+  waitingForUser = false;
   recording = true;
   recBtn.classList.add('recording');
   recBtn.textContent = '🔴 Recording…';
@@ -499,6 +542,7 @@ async function startRec() {
     recBtn.classList.remove('recording');
     recBtn.textContent = '🎤 按住说话';
     setStatus('服务端 ASR 不可用，请检查 DashScope 配置');
+    scheduleIdleFollowup();
     return;
   }
   try {
@@ -508,7 +552,9 @@ async function startRec() {
     mediaRecorder.start();
   } catch {
     setStatus('麦克风权限被拒绝'); recording = false; recBtn.classList.remove('recording');
-    recBtn.textContent = '🎤 按住说话'; return;
+    recBtn.textContent = '🎤 按住说话';
+    scheduleIdleFollowup();
+    return;
   }
   try {
     await startAsrStream();
@@ -521,6 +567,7 @@ async function startRec() {
     recBtn.classList.remove('recording');
     recBtn.textContent = '🎤 按住说话';
     setStatus('服务端 ASR 启动失败，请检查连接后重试');
+    scheduleIdleFollowup();
   }
 }
 
@@ -536,13 +583,25 @@ async function stopRec() {
   const sttMs = performance.now() - sttStart;
   const blob = new Blob(chunks, { type: 'audio/webm' });
   const audioB64 = await blobToB64(blob);
-  if (!text) { setStatus('没听清，请重试'); return; }
+  if (!text) {
+    setStatus('没听清，请重试');
+    scheduleIdleFollowup();
+    return;
+  }
   addMessage(text, 'user');
   setStatus('等待回复…');
   // 连接可能在录音期间断开(服务重启/网络抖动),发送前保活并重连
   try {
     await ensureWsOpen();
-    ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
+    ws.send(JSON.stringify({
+      type: 'turn',
+      text,
+      audio_b64: audioB64,
+      stt_ms: sttMs,
+      response_wait_ms: Math.round(responseWaitMs),
+    }));
+    responseWaitMs = 0;
+    heartbeatSequence = 0;
   } catch {
     setStatus('⚠️ 连接已断开,正在重连,请再说一次');
   }
@@ -652,20 +711,25 @@ function primeAudio() {
 }
 
 function playAudio(b64) {
-  playAudioSource('data:audio/mp3;base64,' + b64);
+  return playAudioSource('data:audio/mp3;base64,' + b64);
 }
 
 function playAudioSource(source) {
   lastAudioSource = source;
   if (!audioPlayer) audioPlayer = new Audio();
   const ready = audioPrimePromise || Promise.resolve();
-  ready.finally(() => {
-    audioPlayer.muted = false;
-    audioPlayer.src = source;
-    audioPlayer.play().then(() => hideReplay()).catch(() => {
-      // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
-      setStatus('🔇 浏览器拦截了自动播放');
-      showReplay();
+  return new Promise(resolve => {
+    ready.finally(() => {
+      audioPlayer.muted = false;
+      audioPlayer.src = source;
+      audioPlayer.onended = resolve;
+      audioPlayer.onerror = resolve;
+      audioPlayer.play().then(() => hideReplay()).catch(() => {
+        // 自动播放被拦截:不静默失败,显式提示并给出手动重播。
+        setStatus('🔇 浏览器拦截了自动播放');
+        showReplay();
+        resolve();
+      });
     });
   });
 }
@@ -702,11 +766,26 @@ function blobToB64(blob) {
 function onServerMessage(ev) {
   const m = JSON.parse(ev.data);
   if (m.error) { setStatus('错误: ' + m.error); return; }
+  if (m.type === 'heartbeat') {
+    if (!waitingForUser) return;
+    setStatus('');
+    heartbeatSequence += 1;
+    addMessage(m.assistant_text, 'assistant');
+    const playback = m.audio_b64 ? playAudio(m.audio_b64) : Promise.resolve();
+    playback.finally(() => {
+      if (waitingForUser) scheduleIdleFollowup();
+    });
+    return;
+  }
   setStatus('');
   addMessage(m.assistant_text, 'assistant');
   if (m.inline_correction) addCorrection('即时: ' + m.inline_correction);
-  if (m.audio_b64) playAudio(m.audio_b64);
+  const playback = m.audio_b64 ? playAudio(m.audio_b64) : Promise.resolve();
+  playback.finally(() => {
+    if (!m.goal_reached) scheduleIdleFollowup();
+  });
   if (m.goal_reached) {
+    waitingForUser = false;
     setStatus('🎉 场景完成！可以结束课程了');
     checkLastTask();
   }
@@ -715,6 +794,7 @@ function onServerMessage(ev) {
 // ── Back button ────────────────────────────────────────────────────────────────
 
 document.getElementById('back-btn').addEventListener('click', () => {
+  resetIdleTracking();
   if (ws) { try { ws.close(); } catch {} ws = null; }
   sessionId = null; currentScenario = null;
   document.getElementById('messages').innerHTML = '';
@@ -727,6 +807,7 @@ document.getElementById('back-btn').addEventListener('click', () => {
 // ── Finish / Summary ───────────────────────────────────────────────────────────
 
 document.getElementById('finish-btn').addEventListener('click', async () => {
+  resetIdleTracking();
   if (!sessionId) return;
   document.getElementById('finish-btn').disabled = true;
   setStatus('生成总结中…');
@@ -747,7 +828,9 @@ function renderSummary(s) {
     `综合 <b>${s.overall_score}</b> &nbsp;|&nbsp; ` +
     `发音 ${s.sub_scores.pronunciation} &nbsp;|&nbsp; ` +
     `流利 ${s.sub_scores.fluency} &nbsp;|&nbsp; ` +
-    `语法 ${s.sub_scores.grammar}`;
+    `语法 ${s.sub_scores.grammar} &nbsp;|&nbsp; ` +
+    `反应 ${s.sub_scores.responsiveness} &nbsp;|&nbsp; ` +
+    `等待 ${(s.response_wait_total_ms / 1000).toFixed(1)} 秒`;
   document.getElementById('word-scores').innerHTML = s.word_scores.map(w => {
     const hue = Math.round(w.score * 1.2);
     return `<span class="word" style="background:hsl(${hue},65%,42%)">${w.word} ${w.score}</span>`;
