@@ -47,7 +47,8 @@ class DashscopeStreamingSession:
                  recognizer_factory: RecognizerFactory | None = None,
                  language_hints: list[str] | None = None):
         self.on_partial = on_partial
-        self._latest = ""
+        self._finalized: list[str] = []
+        self._current = ""
         self._stopped = False
         factory = recognizer_factory or _default_recognizer_factory(language_hints or ["en"])
         self._recognizer = factory(self)
@@ -57,19 +58,31 @@ class DashscopeStreamingSession:
         """推一帧 PCM16/16k 音频。"""
         self._recognizer.send_audio_frame(pcm)
 
-    def _on_text(self, text: str) -> None:
-        """识别器回调:保留最新一句作为当前结果,并回传 partial。"""
+    def _aggregate(self) -> str:
+        parts = [*self._finalized]
+        if self._current:
+            parts.append(self._current)
+        return " ".join(parts).strip()
+
+    def _on_text(self, text: str, sentence_end: bool = False) -> None:
+        """识别器回调:更新当前句,并在句末归档后回传完整聚合文本。"""
         text = (text or "").strip()
         if text:
-            self._latest = text
-            self.on_partial(text)
+            self._current = text
+        if sentence_end and self._current:
+            self._finalized.append(self._current)
+            self._current = ""
+        if text or sentence_end:
+            aggregate = self._aggregate()
+            if aggregate:
+                self.on_partial(aggregate)
 
     def final(self) -> SttResult:
         """停止识别并返回最终聚合文本。可重复调用(幂等)。"""
         if not self._stopped:
             self._recognizer.stop()
             self._stopped = True
-        return SttResult(text=self._latest, source="dashscope")
+        return SttResult(text=self._aggregate(), source="dashscope")
 
 
 def _default_recognizer_factory(language_hints: list[str]) -> RecognizerFactory:
@@ -79,7 +92,7 @@ def _default_recognizer_factory(language_hints: list[str]) -> RecognizerFactory:
     """
     def factory(session: "DashscopeStreamingSession") -> Recognizer:
         import dashscope
-        from dashscope.audio.asr import Recognition, RecognitionCallback
+        from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
         from app.config import get_settings
 
         dashscope.api_key = get_settings().dashscope_api_key
@@ -89,7 +102,10 @@ def _default_recognizer_factory(language_hints: list[str]) -> RecognizerFactory:
             def on_event(self, result) -> None:  # noqa: ANN001
                 sentence = result.get_sentence()
                 if sentence and sentence.get("text"):
-                    session._on_text(sentence["text"])
+                    session._on_text(
+                        sentence["text"],
+                        RecognitionResult.is_sentence_end(sentence),
+                    )
 
         return Recognition(
             model="paraformer-realtime-v2", format="pcm",
