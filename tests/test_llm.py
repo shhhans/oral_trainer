@@ -1,6 +1,9 @@
 import json
 from app.models import LlmReply, Correction
-from app.services.llm import LlmService, extract_json
+from app.services.llm import LlmService, extract_json, CHAT_SYSTEM_SUFFIX
+
+# 点餐专属词:出现在公共 suffix 里就会污染其它场景(hotel/doctor/interview...)
+ORDERING_TERMS = ["点餐", "订单", "菜品", "顾客", "点错单", "下单"]
 
 
 def test_extract_json_from_fenced():
@@ -25,6 +28,27 @@ def test_chat_falls_back_on_bad_json():
     assert reply.reply == "Hello there!"
     assert reply.inline_correction is None
     assert reply.goal_reached is False
+
+
+def test_chat_suffix_is_scenario_neutral():
+    # 公共 suffix 只应规定 JSON 格式,不得含任何点餐专属语义
+    for term in ORDERING_TERMS:
+        assert term not in CHAT_SYSTEM_SUFFIX, f"suffix 含点餐专属词: {term}"
+
+
+def test_chat_does_not_inject_ordering_into_other_scenarios():
+    captured = {}
+
+    def transport(messages, temperature):
+        captured["messages"] = messages
+        return json.dumps({"reply": "ok", "goal_reached": False})
+
+    svc = LlmService(transport=transport)
+    hotel_prompt = "You are a hotel receptionist. Help the guest check in."
+    svc.chat(system_prompt=hotel_prompt, history=[], user_text="Hi")
+    system_content = captured["messages"][0]["content"]
+    for term in ORDERING_TERMS:
+        assert term not in system_content, f"非点餐场景 system prompt 被注入: {term}"
 
 
 def test_correct_returns_corrections():
