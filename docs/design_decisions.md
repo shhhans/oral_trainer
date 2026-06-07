@@ -304,3 +304,15 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Rationale**: `GET /api/session/{id}/summary` and `GET /api/session/{id}/turns` both load all turn data. Polling for session completion (e.g., waiting for finish()) doesn't need turn data — just `status` and `turn_count`. The lightweight query avoids O(turns) JSON deserialization on every poll.
 
+---
+
+## DD-16 — SQLite Schema Migration for `difficulty` Column
+
+**Branch**: fix/db-schema-migration
+
+**Decision**: `Storage._migrate()` applies additive `ALTER TABLE` statements at startup; each is wrapped in try/except to be idempotent. `get_session` falls back to "beginner" if the column is absent at read time (pre-migration row).
+
+**Rationale**: `CREATE TABLE IF NOT EXISTS` only creates tables for new databases. Existing databases opened after a column is added would fail `save_session` (OperationalError: table has no column "difficulty"). The migration list in `_migrate()` is append-only — new columns go there, never to the `CREATE TABLE` statement.
+
+**Pattern**: Future column additions should be added to `_migrate()`, not to `CREATE TABLE IF NOT EXISTS`. The table definition stays as the minimal baseline (id + immutable fields); `_migrate()` carries all history.
+

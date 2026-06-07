@@ -27,12 +27,26 @@ class Storage:
                 PRIMARY KEY(session_id, idx))""")
             c.execute("""CREATE TABLE IF NOT EXISTS summaries(
                 session_id TEXT PRIMARY KEY, data TEXT)""")
+            self._migrate(c)
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        """Apply additive schema migrations to existing databases."""
+        migrations = [
+            "ALTER TABLE sessions ADD COLUMN difficulty TEXT DEFAULT 'beginner'",
+        ]
+        for sql in migrations:
+            try:
+                c.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def save_session(self, s: Session) -> None:
         with self._conn() as c:
             c.execute("""INSERT INTO sessions(id, scenario, difficulty, status, created_at, completed_at)
                 VALUES(?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+                    difficulty=excluded.difficulty,
                     completed_at=excluded.completed_at""",
                 (s.id, s.scenario, s.difficulty, s.status, s.created_at, s.completed_at))
 
@@ -50,8 +64,11 @@ class Storage:
             turn_rows = c.execute(
                 "SELECT data FROM turns WHERE session_id=? ORDER BY idx", (session_id,)
             ).fetchall()
+        # Use safe fallback for pre-migration rows that may lack these columns
+        keys = row.keys()
         s = Session(id=row["id"], scenario=row["scenario"],
-                    difficulty=row["difficulty"] or "beginner",
+                    dialect=row["dialect"] if "dialect" in keys else "en-us",
+                    difficulty=row["difficulty"] if "difficulty" in keys else "beginner",
                     status=row["status"],
                     created_at=row["created_at"], completed_at=row["completed_at"])
         s.turns = [Turn.model_validate_json(r["data"]) for r in turn_rows]
