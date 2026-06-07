@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "oral-trainer"
 version = "0.1.0"
@@ -16,6 +20,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+# 仓库根目录除 app 外还有 data/frontend/resources 等非包目录,
+# 关闭 setuptools 自动发现,显式只打包 app 及其子包。
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
