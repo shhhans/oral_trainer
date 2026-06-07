@@ -171,3 +171,19 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 - `POST /api/session?dialect=en-gb` 存入 Session
 - `get_voice_for_dialect()` 映射 dialect → MiniMax voice_id（可通过环境变量配置）
 - `PronService.assess(..., dialect=None)` 无指定时回退到 `SPEECHACE_DIALECT` 环境变量
+---
+
+## DD-06 — Opening Greeting Pre-generation
+
+**Branch**: feat/opening-greeting  
+**Decision**: Pre-generate the opening TTS audio ("Welcome! What can I get for you today?") in a background task immediately after session creation, storing bytes in `_greeting_cache[session_id]`. On the first WebSocket turn, use the cached audio instead of calling TTS.
+
+**Implementation**:
+- `POST /api/session` uses FastAPI `BackgroundTasks` to launch `_pregenerate_greeting(sid, services)`
+- `_pregenerate_greeting` runs `asyncio.to_thread(tts.synthesize, OPENING_LINE)` and stores result in `_greeting_cache`
+- `ws_turn` checks `len(session.turns) == 0 and session_id in _greeting_cache`; if true, pops cache entry and skips TTS call (first-turn `tts_ms` is None)
+- Cache entries are evicted on: first use (pop), `finish()` REST call, and WebSocket disconnect (finally block)
+
+**Rationale**: TTS synthesis adds ~500ms latency to every turn. The opening line is fixed and predictable, so it can be synthesized speculatively during the time the user opens their microphone. The cache pop on first use ensures the pre-generated audio is never replayed accidentally on subsequent turns.
+
+**Alternatives considered**: Pre-generate every assistant turn speculatively — too wasteful and often wrong. Streaming TTS — larger refactor; see DD-07 aspirations. Client-side caching — requires frontend change.

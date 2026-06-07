@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from fastapi import FastAPI, Query, WebSocket
+from fastapi import BackgroundTasks, FastAPI, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
@@ -23,6 +23,10 @@ from app.services.pron import PronService
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 MENU_PATH = os.path.join("resources", "menu.json")
+OPENING_LINE = "Welcome! What can I get for you today?"
+
+# Pre-generated greeting audio keyed by session_id; popped on first use or session end.
+_greeting_cache: dict[str, bytes] = {}
 
 # Per-session pending hints from side-chain analysis.
 # Populated by _bg_analyze when a serious grammar error is detected;
@@ -67,11 +71,13 @@ def create_app(services: Services | None = None) -> FastAPI:
         return [m.__dict__ for m in menu]
 
     @app.post("/api/session")
-    def create_session(dialect: str = Query(default="en-us",
-                                            pattern="^(en-us|en-gb)$")):
+    async def create_session(background_tasks: BackgroundTasks,
+                             dialect: str = Query(default="en-us",
+                                                  pattern="^(en-us|en-gb)$")):
         sid = uuid.uuid4().hex[:12]
         storage.save_session(Session(id=sid, scenario="ordering",
                                      dialect=dialect, created_at=time.time()))
+        background_tasks.add_task(_pregenerate_greeting, sid, services)
         return {"id": sid, "dialect": dialect}
 
     @app.websocket("/ws/{session_id}")
@@ -90,6 +96,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                 user_text = (data.get("text") or "").strip()
                 # Consume any pending hint injected by the previous turn's side-chain analysis.
                 inline_hint = _pending_hints.pop(session_id, None)
+                is_first_turn = len(session.turns) == 0
                 timer = StepTimer()
                 # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
                 # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
@@ -99,9 +106,13 @@ def create_app(services: Services | None = None) -> FastAPI:
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,
                         inline_hint=inline_hint)
-                    with timer.measure("tts"):
-                        audio = await asyncio.to_thread(
-                            services.tts.synthesize, turn.assistant_text, voice)
+                    # First turn: serve pre-generated greeting if available (skip TTS latency).
+                    if is_first_turn and session_id in _greeting_cache:
+                        audio = _greeting_cache.pop(session_id)
+                    else:
+                        with timer.measure("tts"):
+                            audio = await asyncio.to_thread(
+                                services.tts.synthesize, turn.assistant_text, voice)
 
                 # 落盘音频 + 计时回填
                 turn.assistant_audio_path = storage.save_audio(
@@ -141,6 +152,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             pass
         finally:
             _pending_hints.pop(session_id, None)  # 断线时清理，防止内存泄漏
+            _greeting_cache.pop(session_id, None)
 
     @app.post("/api/session/{session_id}/finish")
     def finish(session_id: str):
@@ -151,6 +163,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         session.completed_at = time.time()
         storage.save_session(session)
         _pending_hints.pop(session_id, None)  # 会话正常结束时清理
+        _greeting_cache.pop(session_id, None)
         summary = build_summary(session, llm=services.llm)
         storage.save_summary(summary)
         return summary.model_dump()
@@ -170,6 +183,15 @@ def create_app(services: Services | None = None) -> FastAPI:
         return aggregate_timings(session.turns).model_dump()
 
     return app
+
+
+async def _pregenerate_greeting(session_id: str, services: Services) -> None:
+    """Synthesize the fixed opening line in the background and cache the audio bytes."""
+    try:
+        audio = await asyncio.to_thread(services.tts.synthesize, OPENING_LINE)
+        _greeting_cache[session_id] = audio
+    except Exception:  # noqa: BLE001
+        pass  # cache miss is safe; ws_turn falls back to normal TTS
 
 
 async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage,
