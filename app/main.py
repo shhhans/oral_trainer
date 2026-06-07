@@ -61,6 +61,10 @@ def create_app(services: Services | None = None) -> FastAPI:
     def get_menu():
         return [m.__dict__ for m in menu]
 
+    @app.get("/api/sessions")
+    def list_sessions(limit: int = 50):
+        return storage.list_sessions(limit=limit)
+
     @app.post("/api/session")
     def create_session():
         sid = uuid.uuid4().hex[:12]

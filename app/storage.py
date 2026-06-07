@@ -74,3 +74,12 @@ class Storage:
             row = c.execute("SELECT data FROM summaries WHERE session_id=?",
                             (session_id,)).fetchone()
         return Summary.model_validate_json(row["data"]) if row else None
+
+    def list_sessions(self, limit: int = 50) -> list[dict]:
+        """Return basic session metadata ordered by creation time descending."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, scenario, status, created_at, completed_at "
+                "FROM sessions ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
