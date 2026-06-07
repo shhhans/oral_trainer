@@ -287,6 +287,10 @@ function renderPhoneGuide() {
 let sessionId = null, currentScenario = null, ws = null;
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
+// 复用同一个 audio 元素:回复音频在 WebSocket 异步回调里播放,已脱离用户手势栈,
+// Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
+// 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
+let audioPlayer = null, lastAudioB64 = null;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const recognition = SR ? new SR() : null;
 if (recognition) { recognition.lang = 'en-US'; recognition.interimResults = false; }
@@ -340,9 +344,34 @@ async function startScenario(scenarioId) {
   document.getElementById('session-view').classList.remove('hidden');
 
   // WebSocket
+  connectWs();
+}
+
+// 建立(或重建)主链路 WebSocket。会话状态由服务端 SQLite 持久化,
+// 同一 session_id 重连后可无缝继续,故断线时按需重连是安全的。
+function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/${sessionId}`);
   ws.onmessage = onServerMessage;
+  // 服务重启(如 dev --reload)、网络抖动都会触发 close;不在此重连,
+  // 留待下次发送时 ensureWsOpen 重连,避免会话结束后无谓重连。
+  ws.onclose = e => console.warn('WS closed', e.code, e.reason);
+  ws.onerror = () => console.warn('WS error');
+}
+
+// 确保 ws 处于 OPEN:已断开则重连并等待握手完成,超时/失败则 reject。
+function ensureWsOpen(timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    if (!sessionId) return reject(new Error('no active session'));
+    if (ws && ws.readyState === WebSocket.OPEN) return resolve();
+    // CLOSED/CLOSING/无连接 → 重建;CONNECTING → 复用,仅等待其 open
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      connectWs();
+    }
+    const timer = setTimeout(() => reject(new Error('ws connect timeout')), timeoutMs);
+    ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('ws error')); }, { once: true });
+  });
 }
 
 // ── Gap-fill interaction ────────────────────────────────────────────────────────
@@ -432,6 +461,7 @@ async function startRec() {
   recBtn.classList.add('recording');
   recBtn.textContent = '🔴 Recording…';
   setStatus('');
+  primeAudio();  // 在用户手势内解锁音频,确保稍后异步回复能正常播放
   recognizing = ''; chunks = []; sttStart = performance.now();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -464,7 +494,59 @@ async function stopRec() {
   if (!text) { setStatus('没听清，请重试'); return; }
   addMessage(text, 'user');
   setStatus('等待回复…');
-  ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
+  // 连接可能在录音期间断开(服务重启/网络抖动),发送前保活并重连
+  try {
+    await ensureWsOpen();
+    ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
+  } catch {
+    setStatus('⚠️ 连接已断开,正在重连,请再说一次');
+  }
+}
+
+// ── Audio playback ───────────────────────────────────────────────────────────
+
+// 在用户手势内"解锁"播放元素:静音播一下再暂停,使后续异步 play 不被自动播放策略拦截。
+function primeAudio() {
+  if (!audioPlayer) audioPlayer = new Audio();
+  if (audioPlayer.dataset.primed) return;
+  audioPlayer.muted = true;
+  audioPlayer.play().then(() => {
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+    audioPlayer.muted = false;
+    audioPlayer.dataset.primed = '1';
+  }).catch(() => {});  // prime 失败不影响录音流程,真正播放时还有重播回退兜底
+}
+
+function playAudio(b64) {
+  lastAudioB64 = b64;
+  if (!audioPlayer) audioPlayer = new Audio();
+  audioPlayer.muted = false;
+  audioPlayer.src = 'data:audio/mp3;base64,' + b64;
+  audioPlayer.play().then(() => hideReplay()).catch(() => {
+    // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
+    setStatus('🔇 浏览器拦截了自动播放');
+    showReplay();
+  });
+}
+
+function showReplay() {
+  let btn = document.getElementById('replay-btn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'replay-btn';
+    btn.textContent = '▶ 重播';
+    btn.addEventListener('click', () => {
+      if (lastAudioB64) playAudio(lastAudioB64);
+    });
+    document.getElementById('controls').appendChild(btn);
+  }
+  btn.classList.remove('hidden');
+}
+
+function hideReplay() {
+  const btn = document.getElementById('replay-btn');
+  if (btn) btn.classList.add('hidden');
 }
 
 function blobToB64(blob) {
@@ -483,7 +565,7 @@ function onServerMessage(ev) {
   setStatus('');
   addMessage(m.assistant_text, 'assistant');
   if (m.inline_correction) addCorrection('即时: ' + m.inline_correction);
-  if (m.audio_b64) new Audio('data:audio/mp3;base64,' + m.audio_b64).play();
+  if (m.audio_b64) playAudio(m.audio_b64);
   if (m.goal_reached) {
     setStatus('🎉 场景完成！可以结束课程了');
     checkLastTask();
