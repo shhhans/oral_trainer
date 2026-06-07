@@ -35,10 +35,33 @@ def load_menu_or_default(path: str) -> list[MenuItem]:
     return load_menu(path) if os.path.exists(path) else list(DEFAULT_MENU)
 
 
-def build_system_prompt(items: list[MenuItem]) -> str:
+_DIFFICULTY_NOTES = {
+    "beginner": (
+        "The customer is a beginner English learner. "
+        "Speak slowly and use simple vocabulary. "
+        "Repeat the order back to confirm each item. "
+        "If the customer seems confused, rephrase in simpler words."
+    ),
+    "intermediate": (
+        "The customer has intermediate English. "
+        "Use natural conversational pace. "
+        "Ask friendly follow-up questions (size, drink, any sides?)."
+    ),
+    "advanced": (
+        "The customer is an advanced English learner. "
+        "Use natural restaurant vocabulary (specials, sides, substitutions, allergies). "
+        "Speak at a brisk pace. "
+        "Ask about preferences, dietary restrictions, and upsell naturally."
+    ),
+}
+
+
+def build_system_prompt(items: list[MenuItem], difficulty: str = "beginner") -> str:
     menu_lines = "\n".join(f"- {i.name} ({i.price}): {i.desc}" for i in items)
+    difficulty_note = _DIFFICULTY_NOTES.get(difficulty, _DIFFICULTY_NOTES["beginner"])
     return (
-        "You are a friendly restaurant waiter/server. Speak natural, simple English. "
+        "You are a friendly restaurant waiter/server. "
+        f"{difficulty_note} "
         "Keep replies short (1-2 sentences) so the conversation flows. "
         "Help the customer order from this menu:\n"
         f"{menu_lines}\n"

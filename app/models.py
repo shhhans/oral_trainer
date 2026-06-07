@@ -47,7 +47,8 @@ class Turn(BaseModel):
 class Session(BaseModel):
     id: str
     scenario: str
-    status: str = "active"   # active | completed
+    difficulty: str = "beginner"  # beginner | intermediate | advanced
+    status: str = "active"        # active | completed
     created_at: float
     completed_at: float | None = None
     turns: list[Turn] = Field(default_factory=list)

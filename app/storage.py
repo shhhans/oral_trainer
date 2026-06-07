@@ -20,8 +20,8 @@ class Storage:
     def _init_db(self) -> None:
         with self._conn() as c:
             c.execute("""CREATE TABLE IF NOT EXISTS sessions(
-                id TEXT PRIMARY KEY, scenario TEXT, status TEXT,
-                created_at REAL, completed_at REAL)""")
+                id TEXT PRIMARY KEY, scenario TEXT, difficulty TEXT DEFAULT 'beginner',
+                status TEXT, created_at REAL, completed_at REAL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS turns(
                 session_id TEXT, idx INTEGER, data TEXT,
                 PRIMARY KEY(session_id, idx))""")
@@ -30,11 +30,11 @@ class Storage:
 
     def save_session(self, s: Session) -> None:
         with self._conn() as c:
-            c.execute("""INSERT INTO sessions(id, scenario, status, created_at, completed_at)
-                VALUES(?,?,?,?,?)
+            c.execute("""INSERT INTO sessions(id, scenario, difficulty, status, created_at, completed_at)
+                VALUES(?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET status=excluded.status,
                     completed_at=excluded.completed_at""",
-                (s.id, s.scenario, s.status, s.created_at, s.completed_at))
+                (s.id, s.scenario, s.difficulty, s.status, s.created_at, s.completed_at))
 
     def save_turn(self, t: Turn) -> None:
         with self._conn() as c:
@@ -50,7 +50,9 @@ class Storage:
             turn_rows = c.execute(
                 "SELECT data FROM turns WHERE session_id=? ORDER BY idx", (session_id,)
             ).fetchall()
-        s = Session(id=row["id"], scenario=row["scenario"], status=row["status"],
+        s = Session(id=row["id"], scenario=row["scenario"],
+                    difficulty=row["difficulty"] or "beginner",
+                    status=row["status"],
                     created_at=row["created_at"], completed_at=row["completed_at"])
         s.turns = [Turn.model_validate_json(r["data"]) for r in turn_rows]
         return s
