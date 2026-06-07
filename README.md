@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/60fa3145-1db6-4a57-a2a1-07a537879d5d
+
 # Oral Trainer · 英语口语陪练
 
 在指定场景下进行真实英语对话训练的口语练习工具。比赛项目,当前为 **MVP**:打通"点餐"单场景的 **实时语音对话 → 异步发音测评 → 两级纠错 → 课后量化总结** 全链路,并提供一个 Web playground 演示。
