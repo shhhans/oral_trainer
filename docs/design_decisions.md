@@ -203,3 +203,14 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 **Rationale**: Full history grows linearly with session length, wasting tokens and increasing latency for long sessions. Keeping `turns[0]` preserves the scenario opening (e.g. the user's initial order context), while the recent window maintains conversational coherence. 8 turns covers typical ordering sessions end-to-end.
 
 **Alternatives considered**: Summarize old turns — adds LLM call overhead. Rolling window without anchor — risks losing scenario context. Fixed 8-turn limit — chosen; configurable via env var.
+
+
+---
+
+## DD-08 — `/api/health` Endpoint
+
+**Branch**: feat/health-endpoint  
+**Decision**: Add `GET /api/health` returning `{"status": "ok", "keys_configured": {"minimax": bool, "speechace": bool}}`.
+
+**Rationale**: Without a health endpoint, load balancers and CI pipelines have no way to verify the app is running and configured. The `keys_configured` field distinguishes a running-but-broken deploy (keys missing) from a healthy one without exposing key values.
+
