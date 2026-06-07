@@ -71,9 +71,25 @@ def test_websocket_turn_returns_reply_and_audio(tmp_path):
         msg = ws.receive_json()
     assert msg["assistant_text"] == "Sure, a latte!"
     assert base64.b64decode(msg["audio_b64"]) == b"AUDIO"
-    # tts_ms may be None on first turn if greeting cache was used
+    # 首轮也合成回复音频(不再复用问候缓存),故 tts_ms 必有值
+    assert msg["timings"]["tts_ms"] is not None
     assert msg["timings"]["total_ms"] is not None
     assert msg["goal_reached"] is False
+
+
+def test_first_turn_audio_matches_reply_text(tmp_path):
+    """回归:首轮回传的音频必须是本轮回复的 TTS,而非问候语音频。"""
+    class EchoTts:
+        def synthesize(self, text, voice="x"): return b"TTS:" + text.encode()
+    services = Services(llm=FakeLlm(), tts=EchoTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"), audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
+    sid = client.post("/api/session").json()["id"]
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "turn", "text": "hi", "audio_b64": ""})
+        msg = ws.receive_json()
+    # 音频内容须对应 assistant_text("Sure, a latte!"),而不是开场白
+    assert base64.b64decode(msg["audio_b64"]) == b"TTS:" + msg["assistant_text"].encode()
 
 
 def test_turns_endpoint_returns_turn_list(tmp_path):
