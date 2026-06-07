@@ -287,6 +287,21 @@ function renderPhoneGuide() {
 let sessionId = null, currentScenario = null, ws = null;
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
+let micStream = null;  // 共享的 getUserMedia 流:MediaRecorder(发音评分)与 ASR 采集复用
+// 服务端实时 ASR(DashScope)状态。asrAvailable 由 /api/health 能力探测决定;
+// 不可用时回退浏览器 Web Speech。usingAsr 标记"本次录音"是否真的走了 ASR。
+let asrAvailable = false, usingAsr = false;
+let asrWs = null, asrCtx = null, asrNode = null;
+let asrFinalText = '', asrFinalResolve = null;
+
+// 启动时探测后端是否配置了 DashScope，决定转写走服务端实时 ASR 还是浏览器 Web Speech。
+async function probeAsrCapability() {
+  try {
+    const h = await (await fetch('/api/health')).json();
+    asrAvailable = !!(h.keys_configured && h.keys_configured.dashscope);
+  } catch { asrAvailable = false; }
+}
+probeAsrCapability();
 // 复用同一个 audio 元素:回复音频在 WebSocket 异步回调里播放,已脱离用户手势栈,
 // Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
 // 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
@@ -462,17 +477,21 @@ async function startRec() {
   recBtn.textContent = '🔴 Recording…';
   setStatus('');
   primeAudio();  // 在用户手势内解锁音频,确保稍后异步回复能正常播放
-  recognizing = ''; chunks = []; sttStart = performance.now();
+  recognizing = ''; chunks = []; sttStart = performance.now(); usingAsr = false;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(micStream);  // webm:供后端发音评分,与转写无关
     mediaRecorder.ondataavailable = e => chunks.push(e.data);
     mediaRecorder.start();
   } catch {
     setStatus('麦克风权限被拒绝'); recording = false; recBtn.classList.remove('recording');
     recBtn.textContent = '🎤 按住说话'; return;
   }
-  if (recognition) {
+  // 优先服务端实时 ASR;启动失败(连接/Worklet 等)则就地回退浏览器 Web Speech。
+  if (asrAvailable) {
+    try { await startAsrStream(); usingAsr = true; } catch { usingAsr = false; }
+  }
+  if (!usingAsr && recognition) {
     recognition.onresult = e => { recognizing = e.results[0][0].transcript; };
     recognition.onerror = () => {};
     try { recognition.start(); } catch {}
@@ -484,13 +503,20 @@ async function stopRec() {
   recording = false;
   recBtn.classList.remove('recording');
   recBtn.textContent = '🎤 按住说话';
-  if (recognition) { try { recognition.stop(); } catch {} }
   if (mediaRecorder) mediaRecorder.stop();
-  await new Promise(r => setTimeout(r, 350));
+
+  let text;
+  if (usingAsr) {
+    text = (await stopAsrStream()).trim();
+  } else {
+    if (recognition) { try { recognition.stop(); } catch {} }
+    await new Promise(r => setTimeout(r, 350));
+    text = recognizing.trim();
+  }
+  stopMic();
   const sttMs = performance.now() - sttStart;
   const blob = new Blob(chunks, { type: 'audio/webm' });
   const audioB64 = await blobToB64(blob);
-  const text = recognizing.trim();
   if (!text) { setStatus('没听清，请重试'); return; }
   addMessage(text, 'user');
   setStatus('等待回复…');
@@ -501,6 +527,57 @@ async function stopRec() {
   } catch {
     setStatus('⚠️ 连接已断开,正在重连,请再说一次');
   }
+}
+
+function stopMic() {
+  if (micStream) { try { micStream.getTracks().forEach(t => t.stop()); } catch {} micStream = null; }
+}
+
+// 开启服务端实时 ASR:建 /ws/asr 链路 + AudioWorklet 采集 16k PCM 流式上传,实时回显 partial。
+async function startAsrStream() {
+  asrFinalText = ''; recognizing = '';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  asrWs = new WebSocket(`${proto}//${location.host}/ws/asr/${sessionId}`);
+  asrWs.binaryType = 'arraybuffer';
+  asrWs.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'partial') { recognizing = m.text; setStatus('🎙️ ' + m.text); }
+    else if (m.type === 'final') { asrFinalText = m.text; if (asrFinalResolve) asrFinalResolve(m.text); }
+    // 理论上 /api/health 已先行拦截;万一仍收到 unavailable,关掉本路并永久回退 Web Speech
+    else if (m.type === 'unavailable') { asrAvailable = false; try { asrWs.close(); } catch {} }
+  };
+  await new Promise((res, rej) => {
+    asrWs.onopen = res;
+    asrWs.onerror = () => rej(new Error('asr ws error'));
+    setTimeout(() => rej(new Error('asr ws timeout')), 3000);
+  });
+  // 以 16k 创建 context,源被重采样到 16k,Worklet 直接吐 16k PCM(无需手动降采样)
+  asrCtx = new AudioContext({ sampleRate: 16000 });
+  await asrCtx.audioWorklet.addModule('/static/pcm-worklet.js');
+  const src = asrCtx.createMediaStreamSource(micStream);
+  asrNode = new AudioWorkletNode(asrCtx, 'pcm-worklet');
+  asrNode.port.onmessage = e => {
+    if (asrWs && asrWs.readyState === WebSocket.OPEN) asrWs.send(e.data);
+  };
+  // 经零增益连到 destination 以确保 Worklet 被调度,同时不产生回放
+  const mute = asrCtx.createGain(); mute.gain.value = 0;
+  src.connect(asrNode); asrNode.connect(mute); mute.connect(asrCtx.destination);
+}
+
+// 停止采集并向后端请求最终文本;超时则回退已收到的最后一段 partial。
+async function stopAsrStream() {
+  try { asrNode && asrNode.disconnect(); } catch {}
+  try { asrCtx && (await asrCtx.close()); } catch {}
+  asrCtx = null; asrNode = null;
+  const finalText = await new Promise(res => {
+    asrFinalResolve = res;
+    if (asrWs && asrWs.readyState === WebSocket.OPEN) asrWs.send(JSON.stringify({ type: 'stop' }));
+    setTimeout(() => res(asrFinalText || recognizing), 3000);
+  });
+  asrFinalResolve = null;
+  try { asrWs && asrWs.close(); } catch {}
+  asrWs = null;
+  return finalText;
 }
 
 // ── Audio playback ───────────────────────────────────────────────────────────
