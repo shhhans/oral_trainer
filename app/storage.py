@@ -20,7 +20,8 @@ class Storage:
     def _init_db(self) -> None:
         with self._conn() as c:
             c.execute("""CREATE TABLE IF NOT EXISTS sessions(
-                id TEXT PRIMARY KEY, scenario TEXT, difficulty TEXT DEFAULT 'beginner',
+                id TEXT PRIMARY KEY, scenario TEXT,
+                dialect TEXT DEFAULT 'en-us', difficulty TEXT DEFAULT 'beginner',
                 status TEXT, created_at REAL, completed_at REAL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS turns(
                 session_id TEXT, idx INTEGER, data TEXT,
@@ -34,6 +35,7 @@ class Storage:
         """Apply additive schema migrations to existing databases."""
         migrations = [
             "ALTER TABLE sessions ADD COLUMN difficulty TEXT DEFAULT 'beginner'",
+            "ALTER TABLE sessions ADD COLUMN dialect TEXT DEFAULT 'en-us'",
         ]
         for sql in migrations:
             try:
@@ -43,12 +45,13 @@ class Storage:
 
     def save_session(self, s: Session) -> None:
         with self._conn() as c:
-            c.execute("""INSERT INTO sessions(id, scenario, difficulty, status, created_at, completed_at)
-                VALUES(?,?,?,?,?,?)
+            c.execute("""INSERT INTO sessions(id, scenario, dialect, difficulty, status, created_at, completed_at)
+                VALUES(?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+                    dialect=excluded.dialect,
                     difficulty=excluded.difficulty,
                     completed_at=excluded.completed_at""",
-                (s.id, s.scenario, s.difficulty, s.status, s.created_at, s.completed_at))
+                (s.id, s.scenario, s.dialect, s.difficulty, s.status, s.created_at, s.completed_at))
 
     def save_turn(self, t: Turn) -> None:
         with self._conn() as c:
