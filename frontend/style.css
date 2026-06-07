@@ -1,0 +1,16 @@
+* { box-sizing: border-box; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f5f6f8; color: #1a1a1a; }
+header { background: #2b5cff; color: #fff; padding: 12px 20px; }
+main { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 12px; padding: 16px; }
+section { background: #fff; border-radius: 10px; padding: 14px; }
+#messages { height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 8px 12px; border-radius: 10px; max-width: 80%; }
+.msg.user { align-self: flex-end; background: #2b5cff; color: #fff; }
+.msg.assistant { align-self: flex-start; background: #ebedf2; }
+#record-btn { padding: 10px 18px; font-size: 16px; border: none; border-radius: 8px;
+  background: #2b5cff; color: #fff; cursor: pointer; }
+#record-btn.recording { background: #e23; }
+.card { border-left: 3px solid #e8a13a; padding: 6px 10px; margin: 6px 0; background: #fff8ec; }
+.word { display: inline-block; padding: 2px 6px; margin: 2px; border-radius: 4px; color: #fff; }
+.hidden { display: none; }
+#summary-panel { margin: 16px; }

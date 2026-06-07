@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>口语陪练 · 点餐</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <header><h1>英语口语陪练 · 餐厅点餐</h1></header>
+  <main>
+    <section id="menu-panel"><h2>Menu</h2><ul id="menu-list"></ul></section>
+    <section id="chat-panel">
+      <div id="messages"></div>
+      <div id="controls">
+        <button id="record-btn">按住说话</button>
+        <button id="finish-btn">结束课程</button>
+        <span id="status"></span>
+      </div>
+    </section>
+    <section id="correction-panel"><h2>纠错</h2><div id="corrections"></div></section>
+  </main>
+  <section id="summary-panel" class="hidden">
+    <h2>课后总结</h2>
+    <div id="scores"></div>
+    <div id="word-scores"></div>
+    <canvas id="timing-chart"></canvas>
+    <p id="comment"></p>
+  </section>
+  <script src="/static/app.js"></script>
+</body>
+</html>
