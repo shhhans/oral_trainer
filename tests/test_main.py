@@ -49,6 +49,28 @@ def test_websocket_turn_returns_reply_and_audio(tmp_path):
     assert msg["goal_reached"] is False
 
 
+def test_session_status_endpoint(tmp_path):
+    client = make_client(tmp_path)
+    sid = client.post("/api/session").json()["id"]
+    r = client.get(f"/api/session/{sid}/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == sid
+    assert body["status"] == "active"
+    assert body["turn_count"] == 0
+    # After a turn
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "turn", "text": "hi", "audio_b64": ""})
+        ws.receive_json()
+    r2 = client.get(f"/api/session/{sid}/status")
+    assert r2.json()["turn_count"] == 1
+
+
+def test_session_status_404_for_unknown(tmp_path):
+    client = make_client(tmp_path)
+    assert client.get("/api/session/unknown/status").status_code == 404
+
+
 def test_finish_returns_summary(tmp_path):
     client = make_client(tmp_path)
     sid = client.post("/api/session").json()["id"]
