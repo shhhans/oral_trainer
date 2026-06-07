@@ -204,7 +204,6 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Alternatives considered**: Summarize old turns — adds LLM call overhead. Rolling window without anchor — risks losing scenario context. Fixed 8-turn limit — chosen; configurable via env var.
 
-
 ---
 
 ## DD-08 — `/api/health` Endpoint
@@ -236,4 +235,14 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 **Decision**: Add a REST endpoint that returns all turns for a session as a JSON array, including user transcript, assistant text, pronunciation scores, corrections, and timings.
 
 **Rationale**: The existing `GET /api/session/{id}/summary` aggregates scores but discards per-turn detail. A frontend "review mode" or debugging workflow needs turn-by-turn data (e.g., which specific utterance had the low pronunciation score, what the assistant said at each step). The `Turn.model_dump()` serialization is already complete and includes all fields.
+
+---
+
+## DD-11 — Summary Scoring When Pronunciation Data Is Absent
+
+**Branch**: fix/summary-missing-pronunciation
+
+**Decision**: When no turns have pronunciation data (e.g., browser STT unavailable, audio not recorded), `build_summary` sets `overall = grammar` instead of `0.5*0 + 0.3*0 + 0.2*grammar`.
+
+**Rationale**: The original formula zeroed 80% of the overall score when pronunciation was simply uncollected — unfairly penalizing users. The fix distinguishes "no pronunciation data" (skip pron/fluency from weighting) from "pronunciation scored zero" (include in weighting). Sub-scores still report 0.0 for transparency.
 
