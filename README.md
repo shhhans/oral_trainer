@@ -1,11 +1,10 @@
-
-https://github.com/user-attachments/assets/2765b5ee-9200-4085-b79b-e74e3f40e516
-Uploading video.mp4…
-
-
 # Oral Trainer · 英语口语陪练
 
 面向真实场景的英语口语训练应用。用户通过按住说话进行实时对话，系统完成服务端语音识别、场景化回复、语音合成、发音测评、纠错、反应速度记录与课后评分。
+
+## 演示视频
+
+https://github.com/user-attachments/assets/2765b5ee-9200-4085-b79b-e74e3f40e516
 
 ## 当前功能
 
