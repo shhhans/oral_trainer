@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from fastapi import BackgroundTasks, FastAPI, Query, WebSocket
+from fastapi import FastAPI, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.config import get_settings, warn_missing_keys
@@ -22,10 +22,6 @@ from app.services.tts import TtsService
 from app.services.pron import PronService
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
-OPENING_LINE = "Welcome! What can I get for you today?"  # kept for backward compat
-
-# Pre-generated greeting audio keyed by session_id; popped on first use or session end.
-_greeting_cache: dict[str, bytes] = {}
 
 # Per-session pending hints from side-chain analysis.
 _pending_hints: dict[str, str] = {}
@@ -98,7 +94,6 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.post("/api/session")
     async def create_session(
-        background_tasks: BackgroundTasks,
         scenario: str = Query(default="ordering"),
         dialect: str = Query(default="en-us", pattern="^(en-us|en-gb)$"),
         difficulty: str = Query(default="beginner",
@@ -110,7 +105,6 @@ def create_app(services: Services | None = None) -> FastAPI:
         storage.save_session(Session(id=sid, scenario=scenario,
                                      dialect=dialect, difficulty=difficulty,
                                      created_at=time.time()))
-        background_tasks.add_task(_pregenerate_greeting, sid, services, scenario)
         return {"id": sid, "scenario": scenario, "dialect": dialect, "difficulty": difficulty,
                 "opening_line": SCENARIOS[scenario].opening_line}
 
@@ -129,7 +123,6 @@ def create_app(services: Services | None = None) -> FastAPI:
 
                 user_text = (data.get("text") or "").strip()
                 inline_hint = _pending_hints.pop(session_id, None)
-                is_first_turn = len(session.turns) == 0
                 timer = StepTimer()
                 from app.services.tts import get_voice_for_dialect
                 voice = get_voice_for_dialect(session.dialect)
@@ -139,12 +132,10 @@ def create_app(services: Services | None = None) -> FastAPI:
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,
                         inline_hint=inline_hint, system_prompt=sp)
-                    if is_first_turn and session_id in _greeting_cache:
-                        audio = _greeting_cache.pop(session_id)
-                    else:
-                        with timer.measure("tts"):
-                            audio = await asyncio.to_thread(
-                                services.tts.synthesize, turn.assistant_text, voice)
+                    # 始终为本轮真实回复合成音频,确保音画一致
+                    with timer.measure("tts"):
+                        audio = await asyncio.to_thread(
+                            services.tts.synthesize, turn.assistant_text, voice)
 
                 turn.assistant_audio_path = storage.save_audio(
                     session_id, turn.id + "_tts", audio, suffix=".mp3")
@@ -179,7 +170,6 @@ def create_app(services: Services | None = None) -> FastAPI:
             pass
         finally:
             _pending_hints.pop(session_id, None)
-            _greeting_cache.pop(session_id, None)
 
     @app.post("/api/session/{session_id}/finish")
     def finish(session_id: str):
@@ -190,7 +180,6 @@ def create_app(services: Services | None = None) -> FastAPI:
         session.completed_at = time.time()
         storage.save_session(session)
         _pending_hints.pop(session_id, None)
-        _greeting_cache.pop(session_id, None)
         summary = build_summary(session, llm=services.llm)
         storage.save_summary(summary)
         return summary.model_dump()
@@ -242,18 +231,6 @@ def create_app(services: Services | None = None) -> FastAPI:
         return averaged[:n]
 
     return app
-
-
-async def _pregenerate_greeting(session_id: str, services: Services,
-                                scenario: str = "ordering") -> None:
-    """Synthesize the scenario opening line in the background and cache the audio bytes."""
-    try:
-        sc = SCENARIOS.get(scenario)
-        opening = sc.opening_line if sc else "Hello! How can I help you?"
-        audio = await asyncio.to_thread(services.tts.synthesize, opening)
-        _greeting_cache[session_id] = audio
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage,
