@@ -256,3 +256,25 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Rationale**: Any real history UI needs to enumerate past sessions. Without this, clients would need to guess session IDs. The limit parameter prevents accidentally loading very large databases.
 
+---
+
+## DD-13 — Scenario Difficulty Levels
+
+**Branch**: feat/scenario-difficulty
+
+**Decision**: Sessions carry a `difficulty` field (`beginner` | `intermediate` | `advanced`). The LLM system prompt adjusts language complexity and waiter behavior per level.
+
+**Implementation**:
+- `Session.difficulty: str = "beginner"` — stored in DB
+- `POST /api/session?difficulty=advanced` with regex pattern validation
+- `build_system_prompt(items, difficulty="beginner")` — `_DIFFICULTY_NOTES` dict maps each level to behavioral instructions
+- `DialogueService.run_turn(..., system_prompt=None)` — accepts optional override; `main.py` pre-computes all 3 prompts at startup and passes the right one per turn
+- Unknown difficulty silently falls back to "beginner"
+
+**Level behaviors**:
+- beginner: speak slowly, simple vocabulary, repeat order back, rephrase if confused
+- intermediate: natural pace, follow-up questions (size, drink, sides)
+- advanced: restaurant jargon, allergies/substitutions, upselling, brisk pace
+
+**Alternatives considered**: Per-session system_prompt stored in DB — too flexible and untestable. Single prompt with difficulty variable injection — complex prompt, less predictable behavior.
+

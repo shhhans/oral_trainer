@@ -47,8 +47,9 @@ class Turn(BaseModel):
 class Session(BaseModel):
     id: str
     scenario: str
-    dialect: str = "en-us"   # en-us | en-gb
-    status: str = "active"   # active | completed
+    dialect: str = "en-us"        # en-us | en-gb
+    difficulty: str = "beginner"   # beginner | intermediate | advanced
+    status: str = "active"         # active | completed
     created_at: float
     completed_at: float | None = None
     turns: list[Turn] = Field(default_factory=list)

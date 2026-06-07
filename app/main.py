@@ -55,8 +55,11 @@ def create_app(services: Services | None = None) -> FastAPI:
     services = services or default_services()
     storage = Storage(db_path=services.db_path, audio_dir=services.audio_dir)
     menu = load_menu_or_default(MENU_PATH)  # 文件缺失时回退内置菜单,新检出也能用
-    system_prompt = build_system_prompt(menu)
-    dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=system_prompt)
+    # Pre-compute system prompts for each difficulty level.
+    system_prompts = {d: build_system_prompt(menu, difficulty=d)
+                      for d in ("beginner", "intermediate", "advanced")}
+    dialogue = DialogueService(llm=services.llm, storage=storage,
+                               system_prompt=system_prompts["beginner"])
 
     app = FastAPI()
     if os.path.isdir(FRONTEND_DIR):
@@ -89,12 +92,16 @@ def create_app(services: Services | None = None) -> FastAPI:
     @app.post("/api/session")
     async def create_session(background_tasks: BackgroundTasks,
                              dialect: str = Query(default="en-us",
-                                                  pattern="^(en-us|en-gb)$")):
+                                                  pattern="^(en-us|en-gb)$"),
+                             difficulty: str = Query(
+                                 default="beginner",
+                                 pattern="^(beginner|intermediate|advanced)$")):
         sid = uuid.uuid4().hex[:12]
         storage.save_session(Session(id=sid, scenario="ordering",
-                                     dialect=dialect, created_at=time.time()))
+                                     dialect=dialect, difficulty=difficulty,
+                                     created_at=time.time()))
         background_tasks.add_task(_pregenerate_greeting, sid, services)
-        return {"id": sid, "dialect": dialect}
+        return {"id": sid, "dialect": dialect, "difficulty": difficulty}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
@@ -118,10 +125,11 @@ def create_app(services: Services | None = None) -> FastAPI:
                 # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
                 from app.services.tts import get_voice_for_dialect
                 voice = get_voice_for_dialect(session.dialect)
+                sp = system_prompts.get(session.difficulty, system_prompts["beginner"])
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,
-                        inline_hint=inline_hint)
+                        inline_hint=inline_hint, system_prompt=sp)
                     # First turn: serve pre-generated greeting if available (skip TTS latency).
                     if is_first_turn and session_id in _greeting_cache:
                         audio = _greeting_cache.pop(session_id)

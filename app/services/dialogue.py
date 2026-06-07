@@ -26,8 +26,9 @@ class DialogueService:
         return history
 
     def run_turn(self, session: Session, user_text: str,
-                 inline_hint: str | None = None) -> Turn:
-        system_prompt = self.system_prompt
+                 inline_hint: str | None = None,
+                 system_prompt: str | None = None) -> Turn:
+        system_prompt = system_prompt or self.system_prompt
         if inline_hint:
             system_prompt += f"\n\n[即时纠错提示] {inline_hint}"
 
