@@ -1,92 +1,143 @@
 # Oral Trainer · 英语口语陪练
 
-在指定场景下进行真实英语对话训练的口语练习工具。比赛项目,当前为 **MVP**:打通"点餐"单场景的 **实时语音对话 → 异步发音测评 → 两级纠错 → 课后量化总结** 全链路,并提供一个 Web playground 演示。
+面向真实场景的英语口语训练应用。用户通过按住说话进行实时对话，系统完成服务端语音识别、场景化回复、语音合成、发音测评、纠错、反应速度记录与课后评分。
 
-## 核心设计
+## 当前功能
 
-- **主链路(同步,低延迟)**:浏览器 Web Speech API 本地转写 → MiniMax M2 结构化对话 → MiniMax TTS 语音回复。
-- **副链路(异步,不阻塞对话)**:同段录音转码后送 SpeechAce 做发音测评,MiniMax 做细颗粒语法/用词纠错。
-- **两级纠错**:
-  - *即时(inline)*:仅对严重/影响理解的错误,由主链路 LLM 在回复中自然轻点。
-  - *延迟(deferred)*:所有细颗粒问题走副链路,生成纠错卡片并进课后总结。
-- **流畅性反馈**:每轮 STT/LLM/TTS/端到端各步耗时打点,课后画延迟分解图。
-- **可量化总结**:整体分 + 发音/流利/语法分项 + 词级发音可视化 + LLM 中文点评。
-- **Provider 抽象**:STT/发音/LLM/TTS 均封装为统一接口,可替换厂商(发音测评预留 Azure,后端 STT 预留通义 Paraformer)。
+- **8 个练习场景**：餐厅点餐、酒店入住、购物、问路、看医生、求职面试、电话预约、排球协作。
+- **服务端实时 ASR**：浏览器通过 AudioWorklet 上传 16 kHz PCM，后端使用 DashScope Paraformer 流式返回识别文本。
+- **稳定启动协议**：ASR 使用 `ready/error/unavailable` 握手；支持多句聚合、幂等清理和启动失败协议化。
+- **美式/英式发音**：前端可切换口音，选择会同时作用于 MiniMax TTS 和 SpeechAce 发音评分。
+- **场景化 TTS**：开场白与每轮回复均有语音；默认美式点餐开场白使用项目内静态 MP3，避免首次加载等待。
+- **两级纠错**：
+  - 即时纠错：严重错误由主链路自然提示。
+  - 延迟纠错：后台生成细粒度语法、词汇和表达建议。
+- **空闲追问**：助手说完后每等待 5 秒自动追问，直到用户开始录音。
+- **量化评分**：综合分、发音、流利度、语法、反应速度、词级发音和链路耗时。
+- **评分历史**：History 页面展示真实课程记录、统计指标和可切换的趋势曲线；无记录时展示明确标注的演示曲线。
+- **多难度后端参数**：会话支持 `beginner/intermediate/advanced`，难度会持久化并影响场景提示词。
+- **菜单数据 ETL**：可将 Kaggle CC0 的 Restaurant Menu Items 数据集清洗为带 `course` 分类的菜单目录。
 
-```
-浏览器(Web Speech 转写 + 录音)
-   │  WebSocket
+## 系统链路
+
+```text
+浏览器麦克风
+   │ AudioWorklet: PCM16 / 16 kHz
    ▼
-FastAPI 编排  ──主链路──►  MiniMax M2(对话)─► MiniMax TTS
-   │
-   └──副链路(异步)──►  SpeechAce(发音测评) + MiniMax(纠错)
+DashScope Paraformer 实时 ASR
+   │ 转写文本
+   ▼
+FastAPI WebSocket 编排
+   ├── MiniMax M2：场景对话与即时纠错
+   ├── MiniMax TTS：开场白、回复和空闲追问
+   └── 后台副链路
+       ├── SpeechAce：发音、流利度和词级评分
+       └── MiniMax：延迟纠错
    │
    ▼
-SQLite + 本地音频 ──► 课后总结(整体分 / 词级发音 / 延迟分解图)
+SQLite + 本地音频
+   ├── 课后总结
+   └── History 评分趋势
 ```
 
 ## 技术栈
 
-Python 3.11 · FastAPI · pydantic v2 · httpx · pydub · SQLite · pytest
-前端:原生 HTML/JS · MediaRecorder · Web Speech API · WebSocket · Chart.js
+- 后端：Python 3.11、FastAPI、Pydantic v2、SQLite、httpx
+- 语音：DashScope Paraformer、MiniMax TTS、SpeechAce、pydub/ffmpeg
+- 前端：原生 HTML/CSS/JavaScript、AudioWorklet、MediaRecorder、WebSocket、Chart.js
+- 测试：pytest、FastAPI TestClient
 
 ## 目录结构
 
 | 路径 | 说明 |
 |------|------|
-| `app/services/` | STT/发音/LLM/TTS 封装、主链路编排、副链路分析、计时、音频转码 |
-| `app/scenarios/ordering.py` | 点餐场景配置 + 内置默认菜单 |
-| `app/main.py` | FastAPI:WebSocket 主链路 + 后台副链路 + REST |
-| `app/storage.py` `app/models.py` | SQLite 持久化 + 全链路数据模型 |
-| `scripts/build_menu_dataset.py` | 清洗 Kaggle Restaurant Menu Items 数据集 |
-| `frontend/` | playground 单页 |
-| `docs/superpowers/` | 设计 spec 与实现计划 |
+| `app/main.py` | REST/WebSocket 端点与主副链路编排 |
+| `app/services/` | ASR、LLM、TTS、发音评分、分析和计时服务 |
+| `app/scenarios/` | 场景定义、角色、目标和难度提示 |
+| `app/data/menus.json` | ETL 生成的标准化菜单目录 |
+| `app/models.py` | 会话、轮次、评分和总结数据契约 |
+| `app/storage.py` | SQLite 与音频文件持久化 |
+| `frontend/` | 场景训练、方言切换、总结和 History 页面 |
+| `scripts/build_menu_dataset.py` | Kaggle 菜单数据清洗脚本 |
+| `scripts/check_asr.py` | DashScope ASR 可达性检查 |
+| `tests/` | 单元、协议和集成测试 |
 
 ## 快速开始
 
-依赖管理用 [uv](https://github.com/astral-sh/uv)。
+依赖管理推荐使用 [uv](https://github.com/astral-sh/uv)。
 
 ```powershell
-# 1. 建虚拟环境并装依赖
+# 1. 创建环境并安装依赖
 uv venv --python 3.11
 uv pip install -e ".[dev]"
 
-# 2. 配置 API key:复制 .env.example 为 .env 并填写
-#    MINIMAX_API_KEY / MINIMAX_GROUP_ID / SPEECHACE_API_KEY
+# 2. 复制并配置环境变量
+Copy-Item .env.example .env
 
-# 3. (可选)重建菜单数据
-.venv\Scripts\python.exe scripts/build_menu_dataset.py "Menu Items.csv"
-
-# 4. 启动
-.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+# 3. 启动服务
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-浏览器打开 `http://localhost:8000`(**需用 Chrome**,Web Speech API 依赖)。按住"按住说话"用英文点餐,结束后点"结束课程"查看总结。
+浏览器打开 `http://localhost:8000`。选择口音与场景后，按住录音按钮或空格键开始说话。
 
-> **运行时依赖 ffmpeg**:发音测评要把浏览器录音(webm/opus)转成 16k wav,需系统装 ffmpeg(`winget install Gyan.FFmpeg` 或 conda)。未装时对话与总结仍可用,仅发音测评会被跳过。
+## 环境变量
+
+| 变量 | 用途 |
+|------|------|
+| `DASHSCOPE_API_KEY` | Paraformer 实时语音识别 |
+| `MINIMAX_API_KEY` / `MINIMAX_GROUP_ID` | 场景对话、纠错和 TTS |
+| `MINIMAX_LLM_MODEL` / `MINIMAX_TTS_MODEL` | MiniMax 模型配置 |
+| `MINIMAX_VOICE_EN_US` / `MINIMAX_VOICE_EN_GB` | 美式与英式 TTS 音色 |
+| `SPEECHACE_API_KEY` | 发音和流利度评分 |
+| `DATA_DIR` | SQLite 与录音目录，默认 `data` |
+| `DIALOGUE_HISTORY_WINDOW` | LLM 对话历史窗口 |
+
+## 菜单 ETL
+
+数据源：[Restaurant Menu Items](https://www.kaggle.com/datasets/pranalibose/restaurant)，许可证为 CC0-1.0。原始字段为 `Restaurant`、`Section`、`Item`、`Description`、`Price`。
+
+```powershell
+# 使用 Kaggle CLI 下载
+uvx kaggle datasets download -d pranalibose/restaurant --unzip
+
+# 清洗并生成项目数据
+.\.venv\Scripts\python.exe scripts\build_menu_dataset.py "Menu Items.csv"
+```
+
+ETL 会清理无效记录、标准化价格、去重，并将菜单项分类为：
+
+- `appetizer`
+- `main`
+- `dessert`
+- `beverage`
+
+当前提交的 `app/data/menus.json` 包含 100 家餐厅、6,464 道菜，每家餐厅均覆盖四个 course。
+
+## API 摘要
+
+| 端点 | 用途 |
+|------|------|
+| `POST /api/session` | 创建会话，支持 `scenario`、`dialect`、`difficulty` |
+| `WS /ws/{session_id}` | 对话、TTS 和空闲追问协议 |
+| `WS /ws/asr/{session_id}` | 实时 ASR PCM 流 |
+| `POST /api/session/{id}/finish` | 结束课程并生成总结 |
+| `GET /api/history` | 获取已完成课程的评分历史 |
+| `GET /api/session/{id}/turns` | 获取逐轮记录 |
+| `GET /api/session/{id}/summary` | 获取课后总结 |
+| `GET /api/health` | API key 与服务能力检查 |
 
 ## 测试
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
+node --check frontend\app.js
 ```
 
-单元/集成测试全程 mock 外部 API,不需要 key、不打真网络。
+自动化测试使用 fake provider，不调用真实外部 API。
 
-## 环境变量
+## 运行要求与限制
 
-| 变量 | 说明 |
-|------|------|
-| `MINIMAX_API_KEY` / `MINIMAX_GROUP_ID` | MiniMax 对话 + TTS |
-| `MINIMAX_LLM_MODEL` / `MINIMAX_TTS_MODEL` | 默认 `MiniMax-M2` / `speech-02-turbo` |
-| `SPEECHACE_API_KEY` | SpeechAce 发音测评 |
-| `DASHSCOPE_API_KEY` | 通义 Paraformer(后端 STT 备选,MVP 默认不用) |
-| `DATA_DIR` | SQLite 与音频存储目录,默认 `data` |
-
-## 已知限制 / 待办
-
-- 仅支持 Chrome 系浏览器(Web Speech API);其它浏览器暂无后端 STT 兜底。
-- 单场景(点餐),多场景为配置化预留。
-- press-to-talk 分段处理,未做连续 VAD 与流式 STT/TTS。
-- 待修 review 项:课程结束时序(可能在后台分析完成前生成总结)、麦克风权限竞态等。
-- 真实 API 端到端体验需自行配置 key + ffmpeg + Chrome。
+- 浏览器需要支持 `AudioWorklet`、`MediaRecorder` 和 WebSocket。
+- 发音测评的 WebM 转 WAV 依赖 ffmpeg；未安装时对话仍可运行，但发音评分可能跳过。
+- 当前为按住说话模式，尚未实现连续 VAD。
+- 菜单 ETL 数据已就绪；按难度进行菜单分层抽样和任务卡抽样仍待接入运行时会话。
