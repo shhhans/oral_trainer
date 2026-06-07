@@ -287,6 +287,10 @@ function renderPhoneGuide() {
 let sessionId = null, currentScenario = null, ws = null;
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
+// 复用同一个 audio 元素:回复音频在 WebSocket 异步回调里播放,已脱离用户手势栈,
+// Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
+// 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
+let audioPlayer = null, lastAudioB64 = null;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const recognition = SR ? new SR() : null;
 if (recognition) { recognition.lang = 'en-US'; recognition.interimResults = false; }
@@ -432,6 +436,7 @@ async function startRec() {
   recBtn.classList.add('recording');
   recBtn.textContent = '🔴 Recording…';
   setStatus('');
+  primeAudio();  // 在用户手势内解锁音频,确保稍后异步回复能正常播放
   recognizing = ''; chunks = []; sttStart = performance.now();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -467,6 +472,52 @@ async function stopRec() {
   ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
 }
 
+// ── Audio playback ───────────────────────────────────────────────────────────
+
+// 在用户手势内"解锁"播放元素:静音播一下再暂停,使后续异步 play 不被自动播放策略拦截。
+function primeAudio() {
+  if (!audioPlayer) audioPlayer = new Audio();
+  if (audioPlayer.dataset.primed) return;
+  audioPlayer.muted = true;
+  audioPlayer.play().then(() => {
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+    audioPlayer.muted = false;
+    audioPlayer.dataset.primed = '1';
+  }).catch(() => {});  // prime 失败不影响录音流程,真正播放时还有重播回退兜底
+}
+
+function playAudio(b64) {
+  lastAudioB64 = b64;
+  if (!audioPlayer) audioPlayer = new Audio();
+  audioPlayer.muted = false;
+  audioPlayer.src = 'data:audio/mp3;base64,' + b64;
+  audioPlayer.play().then(() => hideReplay()).catch(() => {
+    // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
+    setStatus('🔇 浏览器拦截了自动播放');
+    showReplay();
+  });
+}
+
+function showReplay() {
+  let btn = document.getElementById('replay-btn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'replay-btn';
+    btn.textContent = '▶ 重播';
+    btn.addEventListener('click', () => {
+      if (lastAudioB64) playAudio(lastAudioB64);
+    });
+    document.getElementById('controls').appendChild(btn);
+  }
+  btn.classList.remove('hidden');
+}
+
+function hideReplay() {
+  const btn = document.getElementById('replay-btn');
+  if (btn) btn.classList.add('hidden');
+}
+
 function blobToB64(blob) {
   return new Promise(res => {
     const r = new FileReader();
@@ -483,7 +534,7 @@ function onServerMessage(ev) {
   setStatus('');
   addMessage(m.assistant_text, 'assistant');
   if (m.inline_correction) addCorrection('即时: ' + m.inline_correction);
-  if (m.audio_b64) new Audio('data:audio/mp3;base64,' + m.audio_b64).play();
+  if (m.audio_b64) playAudio(m.audio_b64);
   if (m.goal_reached) {
     setStatus('🎉 场景完成！可以结束课程了');
     checkLastTask();
