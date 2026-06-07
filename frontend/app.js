@@ -539,17 +539,33 @@ async function startAsrStream() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   asrWs = new WebSocket(`${proto}//${location.host}/ws/asr/${sessionId}`);
   asrWs.binaryType = 'arraybuffer';
-  asrWs.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    if (m.type === 'partial') { recognizing = m.text; setStatus('🎙️ ' + m.text); }
-    else if (m.type === 'final') { asrFinalText = m.text; if (asrFinalResolve) asrFinalResolve(m.text); }
-    // 理论上 /api/health 已先行拦截;万一仍收到 unavailable,关掉本路并永久回退 Web Speech
-    else if (m.type === 'unavailable') { asrAvailable = false; try { asrWs.close(); } catch {} }
-  };
-  await new Promise((res, rej) => {
-    asrWs.onopen = res;
-    asrWs.onerror = () => rej(new Error('asr ws error'));
-    setTimeout(() => rej(new Error('asr ws timeout')), 3000);
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const fail = message => finish(reject, new Error(message));
+    const timer = setTimeout(() => fail('asr ready timeout'), 3000);
+
+    asrWs.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if (m.type === 'ready') finish(resolve);
+      else if (m.type === 'partial') { recognizing = m.text; setStatus('🎙️ ' + m.text); }
+      else if (m.type === 'final') { asrFinalText = m.text; if (asrFinalResolve) asrFinalResolve(m.text); }
+      else if (m.type === 'unavailable' || m.type === 'error') {
+        if (m.type === 'unavailable') asrAvailable = false;
+        fail(`asr ${m.type}`);
+      }
+    };
+    asrWs.onerror = () => fail('asr ws error');
+    asrWs.onclose = () => fail('asr ws closed before ready');
+  }).catch(error => {
+    try { asrWs && asrWs.close(); } catch {}
+    asrWs = null;
+    throw error;
   });
   // 以 16k 创建 context,源被重采样到 16k,Worklet 直接吐 16k PCM(无需手动降采样)
   asrCtx = new AudioContext({ sampleRate: 16000 });
