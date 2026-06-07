@@ -38,7 +38,7 @@ Python 3.11 · FastAPI · pydantic v2 · httpx · pydub · SQLite · pytest
 | `app/scenarios/ordering.py` | 点餐场景配置 + 内置默认菜单 |
 | `app/main.py` | FastAPI:WebSocket 主链路 + 后台副链路 + REST |
 | `app/storage.py` `app/models.py` | SQLite 持久化 + 全链路数据模型 |
-| `scripts/scrape_menu.py` | 爬真实菜单(失败回退内置菜单) |
+| `scripts/build_menu_dataset.py` | 清洗 Kaggle Restaurant Menu Items 数据集 |
 | `frontend/` | playground 单页 |
 | `docs/superpowers/` | 设计 spec 与实现计划 |
 
@@ -54,8 +54,8 @@ uv pip install -e ".[dev]"
 # 2. 配置 API key:复制 .env.example 为 .env 并填写
 #    MINIMAX_API_KEY / MINIMAX_GROUP_ID / SPEECHACE_API_KEY
 
-# 3. (可选)生成菜单。不跑也会用内置默认菜单
-.venv\Scripts\python.exe scripts/scrape_menu.py [菜单页URL]
+# 3. (可选)重建菜单数据
+.venv\Scripts\python.exe scripts/build_menu_dataset.py "Menu Items.csv"
 
 # 4. 启动
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload
