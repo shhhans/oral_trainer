@@ -1,6 +1,7 @@
 
+https://github.com/user-attachments/assets/2765b5ee-9200-4085-b79b-e74e3f40e516
+Uploading video.mp4…
 
-https://github.com/user-attachments/assets/60fa3145-1db6-4a57-a2a1-07a537879d5d
 
 # Oral Trainer · 英语口语陪练
 
