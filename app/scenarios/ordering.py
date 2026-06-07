@@ -3,6 +3,7 @@ goal_reached 由 LLM 在用户确认下单后判定(prompt 里定义目标)。""
 import json
 import os
 from dataclasses import dataclass
+from app.scenarios.base import ScenarioConfig, ScenarioProp
 
 
 @dataclass(frozen=True)
@@ -46,3 +47,31 @@ def build_system_prompt(items: list[MenuItem]) -> str:
         "(at least one dish, and they say they're done). "
         "When the order is confirmed and complete, set goal_reached=true and warmly close."
     )
+
+
+def _build_ordering_scenario(items: list[MenuItem]) -> ScenarioConfig:
+    menu_lines = "\n".join(f"- {i.name} ({i.price}): {i.desc}" for i in items)
+    return ScenarioConfig(
+        id="ordering",
+        display_name="Restaurant Ordering",
+        description="Order food at a restaurant — practice menu vocabulary, making requests, and polite conversation.",
+        opening_line="Welcome! My name is Alex and I'll be your server today. Can I start you off with something to drink?",
+        goal_description="guide the customer until they have confirmed a complete order (at least one item) and said they're done",
+        props=[ScenarioProp("Menu", menu_lines)],
+        base_role="You are a friendly restaurant waiter/server.",
+        difficulty_notes={
+            "beginner": "Use simple food vocabulary. Offer suggestions. Confirm each item clearly.",
+            "intermediate": "Describe specials, handle substitutions, upsell dessert/drinks naturally.",
+            "advanced": "Handle dietary restrictions, split checks, complaints about wait time.",
+        },
+    )
+
+
+SCENARIO: ScenarioConfig | None = None  # populated by load_ordering_scenario()
+
+
+def load_ordering_scenario(path: str = "") -> ScenarioConfig:
+    global SCENARIO
+    items = load_menu_or_default(path) if path else list(DEFAULT_MENU)
+    SCENARIO = _build_ordering_scenario(items)
+    return SCENARIO

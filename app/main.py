@@ -6,13 +6,13 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.models import Session
 from app.storage import Storage
-from app.scenarios.ordering import load_menu_or_default, build_system_prompt
+from app.scenarios.registry import SCENARIOS
 from app.services.dialogue import DialogueService
 from app.services.analysis import analyze_turn, build_summary
 from app.services.timing import StepTimer, aggregate_timings
@@ -22,7 +22,6 @@ from app.services.tts import TtsService
 from app.services.pron import PronService
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
-MENU_PATH = os.path.join("resources", "menu.json")
 
 
 @dataclass
@@ -44,9 +43,13 @@ def default_services() -> Services:
 def create_app(services: Services | None = None) -> FastAPI:
     services = services or default_services()
     storage = Storage(db_path=services.db_path, audio_dir=services.audio_dir)
-    menu = load_menu_or_default(MENU_PATH)  # 文件缺失时回退内置菜单,新检出也能用
-    system_prompt = build_system_prompt(menu)
-    dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=system_prompt)
+    # Pre-compute system prompts for all scenarios × all difficulty levels
+    _prompts: dict[str, dict[str, str]] = {
+        sid: {d: sc.build_prompt(d) for d in ("beginner", "intermediate", "advanced")}
+        for sid, sc in SCENARIOS.items()
+    }
+    default_prompt = _prompts["ordering"]["beginner"]
+    dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=default_prompt)
 
     app = FastAPI()
     if os.path.isdir(FRONTEND_DIR):
@@ -57,15 +60,33 @@ def create_app(services: Services | None = None) -> FastAPI:
         idx = os.path.join(FRONTEND_DIR, "index.html")
         return FileResponse(idx) if os.path.exists(idx) else JSONResponse({"ok": True})
 
+    @app.get("/api/scenarios")
+    def list_scenarios():
+        return [
+            {"id": s.id, "name": s.display_name, "description": s.description,
+             "opening_line": s.opening_line}
+            for s in SCENARIOS.values()
+        ]
+
     @app.get("/api/menu")
     def get_menu():
-        return [m.__dict__ for m in menu]
+        ordering = SCENARIOS.get("ordering")
+        if ordering and ordering.props:
+            lines = [ln.lstrip("- ") for ln in ordering.props[0].detail.splitlines() if ln.strip()]
+            return [{"item": ln} for ln in lines]
+        return []
 
     @app.post("/api/session")
-    def create_session():
+    def create_session(
+        scenario: str = Query(default="ordering"),
+        difficulty: str = Query(default="beginner", pattern="^(beginner|intermediate|advanced)$"),
+    ):
+        if scenario not in SCENARIOS:
+            return JSONResponse({"error": f"Unknown scenario: {scenario}"}, status_code=422)
         sid = uuid.uuid4().hex[:12]
-        storage.save_session(Session(id=sid, scenario="ordering", created_at=time.time()))
-        return {"id": sid}
+        storage.save_session(Session(id=sid, scenario=scenario, created_at=time.time()))
+        return {"id": sid, "scenario": scenario, "difficulty": difficulty,
+                "opening_line": SCENARIOS[scenario].opening_line}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
@@ -84,9 +105,11 @@ def create_app(services: Services | None = None) -> FastAPI:
                 timer = StepTimer()
                 # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
                 # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
+                sp = _prompts.get(session.scenario, _prompts["ordering"]).get(
+                    "beginner", default_prompt)
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
-                        dialogue.run_turn, session, user_text=user_text)
+                        dialogue.run_turn, session, user_text=user_text, system_prompt=sp)
                     with timer.measure("tts"):
                         audio = await asyncio.to_thread(
                             services.tts.synthesize, turn.assistant_text)
