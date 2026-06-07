@@ -57,6 +57,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         idx = os.path.join(FRONTEND_DIR, "index.html")
         return FileResponse(idx) if os.path.exists(idx) else JSONResponse({"ok": True})
 
+    @app.get("/api/health")
+    def health():
+        s = get_settings()
+        return {
+            "status": "ok",
+            "keys_configured": {
+                "minimax": bool(s.minimax_api_key and s.minimax_group_id),
+                "speechace": bool(s.speechace_api_key),
+            },
+        }
+
     @app.get("/api/menu")
     def get_menu():
         return [m.__dict__ for m in menu]

@@ -28,6 +28,17 @@ def make_client(tmp_path):
     return TestClient(create_app(services=services))
 
 
+def test_health_endpoint(tmp_path):
+    client = make_client(tmp_path)
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "keys_configured" in body
+    assert "minimax" in body["keys_configured"]
+    assert "speechace" in body["keys_configured"]
+
+
 def test_create_session_and_menu(tmp_path):
     client = make_client(tmp_path)
     r = client.post("/api/session")
