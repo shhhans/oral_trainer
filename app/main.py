@@ -132,7 +132,9 @@ def create_app(services: Services | None = None) -> FastAPI:
                     "timings": turn.timings.model_dump(),
                 })
         except Exception:  # noqa: BLE001 — 客户端断开等,直接结束连接
-            return
+            pass
+        finally:
+            _pending_hints.pop(session_id, None)  # 断线时清理，防止内存泄漏
 
     @app.post("/api/session/{session_id}/finish")
     def finish(session_id: str):
@@ -142,6 +144,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         session.status = "completed"
         session.completed_at = time.time()
         storage.save_session(session)
+        _pending_hints.pop(session_id, None)  # 会话正常结束时清理
         summary = build_summary(session, llm=services.llm)
         storage.save_summary(summary)
         return summary.model_dump()
