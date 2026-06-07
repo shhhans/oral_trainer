@@ -49,6 +49,25 @@ def test_websocket_turn_returns_reply_and_audio(tmp_path):
     assert msg["goal_reached"] is False
 
 
+def test_turns_endpoint_returns_turn_list(tmp_path):
+    client = make_client(tmp_path)
+    sid = client.post("/api/session").json()["id"]
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_json({"type": "turn", "text": "I want a latte", "audio_b64": ""})
+        ws.receive_json()
+    turns = client.get(f"/api/session/{sid}/turns").json()
+    assert isinstance(turns, list)
+    assert len(turns) == 1
+    assert turns[0]["user_transcript"] == "I want a latte"
+    assert turns[0]["assistant_text"] == "Sure, a latte!"
+
+
+def test_turns_endpoint_404_for_unknown_session(tmp_path):
+    client = make_client(tmp_path)
+    r = client.get("/api/session/doesnotexist/turns")
+    assert r.status_code == 404
+
+
 def test_finish_returns_summary(tmp_path):
     client = make_client(tmp_path)
     sid = client.post("/api/session").json()["id"]

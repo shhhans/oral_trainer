@@ -152,6 +152,13 @@ def create_app(services: Services | None = None) -> FastAPI:
             return JSONResponse({"error": "not found"}, status_code=404)
         return aggregate_timings(session.turns).model_dump()
 
+    @app.get("/api/session/{session_id}/turns")
+    def get_turns(session_id: str):
+        session = storage.get_session(session_id)
+        if session is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return [t.model_dump() for t in session.turns]
+
     return app
 
 
