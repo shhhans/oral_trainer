@@ -1,108 +1,556 @@
-// playground 主逻辑:Web Speech 本地转写 + MediaRecorder 录音 → WebSocket 主链路 → 渲染。
-let sessionId = null, ws = null, mediaRecorder = null, chunks = [], recognizing = "";
-let sttStart = 0;
+'use strict';
 
-async function init() {
-  const menu = await (await fetch("/api/menu")).json();
-  document.getElementById("menu-list").innerHTML =
-    menu.map(m => `<li><b>${m.name}</b> <span>${m.price}</span><br><small>${m.desc}</small></li>`).join("");
-  sessionId = (await (await fetch("/api/session", { method: "POST" })).json()).id;
-  // HTTPS 页面必须用 wss,否则浏览器按混合内容拦截 ws://
-  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${wsProto}//${location.host}/ws/${sessionId}`);
+// ── Scenario definitions (client-side) ────────────────────────────────────────
+
+const SCENARIO_DEFS = {
+  ordering: {
+    icon: '🍽️', title: 'Restaurant Ordering', subtitle: '餐厅点餐',
+    desc: '向服务员点餐，练习菜单词汇和礼貌用语',
+    badge: '基础', badgeClass: 'badge-green',
+    tasks: [
+      'Ask the waiter about a dish on the menu',
+      'Order at least one food item',
+      'Order a drink',
+      'Confirm your complete order',
+    ],
+    renderGuide: () => '<div class="menu-section"><h3>📋 Menu</h3><div id="menu-items"><p style="color:#9ca3af;font-size:.85rem">Loading…</p></div></div>',
+    afterRender: loadOrderingMenu,
+  },
+
+  hotel: {
+    icon: '🏨', title: 'Hotel Check-in', subtitle: '酒店入住',
+    desc: '办理入住，确认预订信息，搞清楚不明确的细节',
+    badge: '基础', badgeClass: 'badge-green',
+    tasks: [
+      'Give your name to confirm the reservation',
+      'Ask which floor your room is on',
+      'Find out if breakfast is included',
+      'Get the WiFi password',
+      'Confirm standard check-in time',
+    ],
+    renderGuide: () => `
+      <div class="mock-doc">
+        <div class="doc-header booking-header">
+          <span>🏨</span>
+          <div>
+            <div class="doc-brand">Grand Plaza Hotel</div>
+            <div class="doc-ref">Booking Confirmation #GP-4721 &nbsp;✓</div>
+          </div>
+        </div>
+        <div class="doc-body">
+          <div class="doc-row"><span class="lbl">Guest Name</span><span class="val">Zhang Wei</span></div>
+          <div class="doc-row"><span class="lbl">Check-in</span><span class="val">Jun 10, 2025</span></div>
+          <div class="doc-row"><span class="lbl">Check-out</span><span class="val">Jun 12, 2025 (2 nights)</span></div>
+          <div class="doc-row"><span class="lbl">Room Type</span><span class="val">Deluxe Room</span></div>
+          <div class="doc-divider"></div>
+          <div class="doc-row gap-row"><span class="lbl">Floor</span><span class="gap-val" data-gap="floor">???</span></div>
+          <div class="doc-row gap-row"><span class="lbl">Breakfast</span><span class="gap-val" data-gap="breakfast">???</span></div>
+          <div class="doc-row gap-row"><span class="lbl">WiFi Password</span><span class="gap-val" data-gap="wifi">???</span></div>
+          <div class="doc-row gap-row"><span class="lbl">Check-in Opens</span><span class="gap-val" data-gap="checkin_time">???</span></div>
+        </div>
+        <div class="doc-tip">💡 Tap any <b>???</b> field to fill it in once you find out</div>
+      </div>`,
+  },
+
+  doctor: {
+    icon: '🏥', title: "Doctor's Appointment", subtitle: '看医生',
+    desc: '描述症状，回答医生追问，听懂诊断和医嘱',
+    badge: '基础', badgeClass: 'badge-green',
+    tasks: [
+      'Describe your main symptom in English',
+      'Tell the doctor how long you have had it',
+      'Answer questions about fever / other symptoms',
+      'Confirm you have no known allergies',
+      "Understand the doctor's diagnosis",
+    ],
+    renderGuide: () => `
+      <div class="mock-doc">
+        <div class="doc-header doctor-header">
+          <span>🏥</span>
+          <div>
+            <div class="doc-brand">City Medical Clinic</div>
+            <div class="doc-ref">Patient Intake Form</div>
+          </div>
+        </div>
+        <div class="doc-body">
+          <div class="doc-row"><span class="lbl">Patient Name</span><span class="val">Alex Chen</span></div>
+          <div class="doc-row"><span class="lbl">Age</span><span class="val">28</span></div>
+          <div class="doc-row"><span class="lbl">Visit Date</span><span class="val">Today</span></div>
+          <div class="doc-divider"></div>
+          <div class="situation-label">🗣 Your situation — say this in English:</div>
+          <div class="situation-card">
+            <div class="symptom-row"><span class="zh">喉咙痛</span><span class="arrow">→</span><span class="en-hint">sore throat… describe it!</span></div>
+            <div class="symptom-row"><span class="zh">已经 3 天</span><span class="arrow">→</span><span class="en-hint">for three days</span></div>
+            <div class="symptom-row"><span class="zh">发烧 38°C</span><span class="arrow">→</span><span class="en-hint">slight fever</span></div>
+            <div class="symptom-row"><span class="zh">无药物过敏</span><span class="arrow">→</span><span class="en-hint">no known allergies</span></div>
+          </div>
+        </div>
+      </div>`,
+  },
+
+  shopping: {
+    icon: '🛍️', title: 'Clothes Shopping', subtitle: '购物',
+    desc: '在服装店购物，问清楚库存、折扣和退换货政策',
+    badge: '基础', badgeClass: 'badge-green',
+    tasks: [
+      'Describe the jacket you are looking for',
+      'Ask if size M is in stock',
+      'Find out if it is currently on sale',
+      'Ask about the return policy',
+      'Make a decision: buy or not',
+    ],
+    renderGuide: () => `
+      <div class="shopping-guide">
+        <div class="product-card">
+          <div class="product-image">🧥</div>
+          <div class="product-info">
+            <div class="product-name">Classic Wool Blend Jacket</div>
+            <div class="product-meta">Color: Navy Blue</div>
+            <div class="product-price">$75.00</div>
+            <div class="doc-divider"></div>
+            <div class="doc-row gap-row"><span class="lbl">Size M in stock</span><span class="gap-val" data-gap="size_m">???</span></div>
+            <div class="doc-row gap-row"><span class="lbl">On sale</span><span class="gap-val" data-gap="on_sale">???</span></div>
+            <div class="doc-row gap-row"><span class="lbl">Return window</span><span class="gap-val" data-gap="returns">???</span></div>
+          </div>
+        </div>
+        <div class="mission-card">
+          <div class="mission-title">🛍️ Your budget: $80 max</div>
+          <p style="margin:2px 0 0;color:#374151;font-size:.82rem">Find out the missing info, then decide whether to buy.</p>
+        </div>
+        <div class="doc-tip">💡 Tap any <b>???</b> field to fill it in once you find out</div>
+      </div>`,
+  },
+
+  interview: {
+    icon: '💼', title: 'Job Interview', subtitle: '求职面试',
+    desc: '用英文自我介绍、回答行为问题、向面试官提问',
+    badge: '基础', badgeClass: 'badge-green',
+    tasks: [
+      'Give a 1-minute self-introduction',
+      'Answer a behavioral question with an example',
+      'Explain the 2022 gap year naturally',
+      'Ask the interviewer at least 2 questions',
+    ],
+    renderGuide: () => `
+      <div class="interview-guide">
+        <div class="profile-card">
+          <div class="profile-avatar">👤</div>
+          <div class="profile-name">Alex Chen</div>
+          <div class="profile-role">Backend Developer · 3 years exp.</div>
+          <div class="profile-skills">Python &nbsp;·&nbsp; SQL &nbsp;·&nbsp; REST APIs &nbsp;·&nbsp; Docker</div>
+          <div class="doc-divider"></div>
+          <div class="profile-warning">⚠️ 2022: gap year — prepare to explain this!</div>
+        </div>
+        <div class="jd-card">
+          <div class="jd-title">💼 Backend Engineer</div>
+          <div class="jd-company">TechStart Inc. · Series B · ~200 people</div>
+          <div class="jd-salary">$80k – $120k + benefits</div>
+          <div class="doc-divider"></div>
+          <div class="jd-req">✓ &nbsp;3+ yrs Python experience</div>
+          <div class="jd-req">✓ &nbsp;REST API design</div>
+          <div class="jd-req">✓ &nbsp;Team player, self-directed</div>
+          <div class="jd-req">✓ &nbsp;CS degree or equivalent</div>
+        </div>
+      </div>`,
+  },
+
+  directions: {
+    icon: '🗺️', title: 'Asking for Directions', subtitle: '问路',
+    desc: '向路人问路，用方位词确认路线，找到目的地',
+    badge: '进阶', badgeClass: 'badge-blue',
+    tasks: [
+      'Politely ask for directions to the Art Museum',
+      'Ask for clarification on one turn',
+      'Confirm the total walking time',
+      'Thank the person',
+    ],
+    renderGuide: renderDirectionsGuide,
+  },
+
+  phone: {
+    icon: '📞', title: 'Phone Appointment', subtitle: '电话预约',
+    desc: '打电话预约，无视觉线索，只靠听力完成预约',
+    badge: '进阶', badgeClass: 'badge-blue',
+    tasks: [
+      'State your name and reason for calling',
+      'Find a slot that fits your calendar',
+      'Give your date of birth when asked',
+      'Confirm and repeat the appointment details',
+    ],
+    renderGuide: renderPhoneGuide,
+  },
+};
+
+// ── Guide render functions ─────────────────────────────────────────────────────
+
+async function loadOrderingMenu() {
+  try {
+    const menu = await (await fetch('/api/menu')).json();
+    document.getElementById('menu-items').innerHTML = menu.map(m => `
+      <div class="menu-item">
+        <div class="menu-item-top">
+          <span class="menu-item-name">${m.name}</span>
+          <span class="menu-item-price">${m.price}</span>
+        </div>
+        <div class="menu-item-desc">${m.desc}</div>
+      </div>`).join('');
+  } catch {
+    document.getElementById('menu-items').textContent = 'Menu unavailable';
+  }
+}
+
+function renderDirectionsGuide() {
+  return `
+    <div class="directions-guide">
+      <div class="map-container">
+        <svg viewBox="0 0 270 230" xmlns="http://www.w3.org/2000/svg" class="city-map">
+          <!-- Background -->
+          <rect width="270" height="230" fill="#e8ece6"/>
+          <!-- Horizontal roads -->
+          <rect x="0" y="50" width="270" height="16" fill="#d6d0c8"/>
+          <rect x="0" y="115" width="270" height="16" fill="#d6d0c8"/>
+          <rect x="0" y="180" width="270" height="16" fill="#d6d0c8"/>
+          <!-- Vertical roads -->
+          <rect x="50" y="0" width="16" height="230" fill="#d6d0c8"/>
+          <rect x="125" y="0" width="16" height="230" fill="#d6d0c8"/>
+          <rect x="200" y="0" width="16" height="230" fill="#d6d0c8"/>
+          <!-- Road centre lines -->
+          <line x1="0" y1="58" x2="270" y2="58" stroke="#e8e0c0" stroke-width="1" stroke-dasharray="8,6"/>
+          <line x1="0" y1="123" x2="270" y2="123" stroke="#e8e0c0" stroke-width="1" stroke-dasharray="8,6"/>
+          <line x1="58" y1="0" x2="58" y2="230" stroke="#e8e0c0" stroke-width="1" stroke-dasharray="8,6"/>
+          <line x1="133" y1="0" x2="133" y2="230" stroke="#e8e0c0" stroke-width="1" stroke-dasharray="8,6"/>
+          <line x1="208" y1="0" x2="208" y2="230" stroke="#e8e0c0" stroke-width="1" stroke-dasharray="8,6"/>
+          <!-- City Hall block -->
+          <rect x="68" y="68" width="50" height="40" fill="#b8c4b0" rx="2"/>
+          <text x="93" y="84" text-anchor="middle" font-size="7" fill="#4a5240" font-weight="600">City</text>
+          <text x="93" y="94" text-anchor="middle" font-size="7" fill="#4a5240" font-weight="600">Hall</text>
+          <!-- Coffee shop -->
+          <rect x="68" y="133" width="50" height="40" fill="#c8d4b8" rx="2"/>
+          <text x="93" y="149" text-anchor="middle" font-size="7" fill="#3a4a2a">☕ Coffee</text>
+          <text x="93" y="160" text-anchor="middle" font-size="7" fill="#3a4a2a">Shop</text>
+          <!-- Post Office -->
+          <rect x="143" y="133" width="50" height="40" fill="#b8c4b0" rx="2"/>
+          <text x="168" y="149" text-anchor="middle" font-size="7" fill="#4a5240">Post</text>
+          <text x="168" y="160" text-anchor="middle" font-size="7" fill="#4a5240">Office</text>
+          <!-- Subway -->
+          <circle cx="133" cy="58" r="9" fill="#2b5cff"/>
+          <text x="133" y="62" text-anchor="middle" font-size="9" fill="white" font-weight="800">M</text>
+          <text x="133" y="47" text-anchor="middle" font-size="7" fill="#2b5cff" font-weight="600">Subway</text>
+          <!-- Art Museum (destination) -->
+          <rect x="218" y="68" width="44" height="40" fill="#fbbf24" rx="2" opacity=".85"/>
+          <text x="240" y="83" text-anchor="middle" font-size="7" fill="#451a03" font-weight="700">Art</text>
+          <text x="240" y="93" text-anchor="middle" font-size="7" fill="#451a03" font-weight="700">Museum</text>
+          <text x="240" y="62" text-anchor="middle" font-size="13">🎯</text>
+          <!-- You are here -->
+          <circle cx="58" cy="188" r="9" fill="#dc2626" opacity=".9"/>
+          <text x="58" y="193" text-anchor="middle" font-size="10" fill="white">▲</text>
+          <text x="58" y="208" text-anchor="middle" font-size="7" fill="#dc2626" font-weight="700">You</text>
+          <!-- Street name hints -->
+          <text x="133" y="112" text-anchor="middle" font-size="6" fill="#9ca3af">Main St</text>
+          <text x="14" y="60" font-size="6" fill="#9ca3af">Oak Ave</text>
+        </svg>
+      </div>
+      <div class="map-legend">
+        <span>▲ You are here</span>
+        <span>🎯 Art Museum (goal)</span>
+      </div>
+      <p class="map-note">The route is not shown — ask the local for directions!</p>
+    </div>`;
+}
+
+function renderPhoneGuide() {
+  return `
+    <div class="phone-guide">
+      <div class="caller-card">
+        <div class="caller-title">📋 Your Details</div>
+        <div class="doc-row"><span class="lbl">Name</span><span class="val">Alex Chen</span></div>
+        <div class="doc-row"><span class="lbl">Date of Birth</span><span class="val">Jan 15, 1996</span></div>
+        <div class="doc-row"><span class="lbl">Reason for call</span><span class="val">Routine checkup</span></div>
+      </div>
+      <div class="calendar-card">
+        <div class="cal-title">📅 Your Week — Jun 9–13</div>
+        <div class="cal-grid">
+          <div class="cal-head">Mon</div><div class="cal-head">Tue</div><div class="cal-head">Wed</div><div class="cal-head">Thu</div><div class="cal-head">Fri</div>
+          <div class="cal-cell busy">Busy<br>9–11am</div>
+          <div class="cal-cell free">FREE</div>
+          <div class="cal-cell busy">Busy<br>1–3pm</div>
+          <div class="cal-cell free">FREE</div>
+          <div class="cal-cell busy">Busy<br>all AM</div>
+        </div>
+        <div class="cal-note">Tuesday &amp; Thursday are free — find a slot that works!</div>
+      </div>
+    </div>`;
+}
+
+// ── State ──────────────────────────────────────────────────────────────────────
+
+let sessionId = null, currentScenario = null, ws = null;
+let mediaRecorder = null, chunks = [], recording = false;
+let sttStart = 0, recognizing = '';
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const recognition = SR ? new SR() : null;
+if (recognition) { recognition.lang = 'en-US'; recognition.interimResults = false; }
+
+// ── Scenario Picker ────────────────────────────────────────────────────────────
+
+function initPicker() {
+  const grid = document.getElementById('scenario-grid');
+  grid.innerHTML = Object.entries(SCENARIO_DEFS).map(([id, sc]) => `
+    <div class="scenario-card" data-id="${id}">
+      <div class="sc-icon">${sc.icon}</div>
+      <div class="sc-title">${sc.title}</div>
+      <div class="sc-sub">${sc.subtitle}</div>
+      <div class="sc-desc">${sc.desc}</div>
+      <span class="sc-badge ${sc.badgeClass}">${sc.badge}</span>
+    </div>`).join('');
+  grid.querySelectorAll('.scenario-card').forEach(card => {
+    card.addEventListener('click', () => startScenario(card.dataset.id));
+  });
+}
+
+async function startScenario(scenarioId) {
+  currentScenario = SCENARIO_DEFS[scenarioId];
+
+  // Create session on server
+  const res = await fetch(`/api/session?scenario=${scenarioId}`, { method: 'POST' });
+  const data = await res.json();
+  sessionId = data.id;
+
+  // Render guide
+  document.getElementById('guide-content').innerHTML = currentScenario.renderGuide();
+  if (currentScenario.afterRender) await currentScenario.afterRender();
+  enableGapFills();
+
+  // Render task list
+  renderTaskList(currentScenario.tasks);
+
+  // Update header
+  document.getElementById('session-title').textContent =
+    `${currentScenario.icon} ${currentScenario.subtitle}`;
+  const badge = document.getElementById('session-badge');
+  badge.textContent = currentScenario.badge;
+  badge.className = `sc-badge ${currentScenario.badgeClass}`;
+
+  // Show opening line as first message
+  const openingLine = data.opening_line || '';
+  if (openingLine) addMessage(openingLine, 'opening');
+
+  // Switch views
+  document.getElementById('picker').classList.add('hidden');
+  document.getElementById('session-view').classList.remove('hidden');
+
+  // WebSocket
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/${sessionId}`);
   ws.onmessage = onServerMessage;
 }
 
+// ── Gap-fill interaction ────────────────────────────────────────────────────────
+
+function enableGapFills() {
+  document.querySelectorAll('.gap-val').forEach(el => {
+    el.addEventListener('click', () => {
+      if (el.classList.contains('filled') || el.querySelector('input')) return;
+      el.innerHTML = '<input type="text" placeholder="type answer…" />';
+      const inp = el.querySelector('input');
+      inp.focus();
+      function commit() {
+        const v = inp.value.trim();
+        el.textContent = v || '???';
+        if (v) el.classList.add('filled');
+      }
+      inp.addEventListener('blur', commit);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+    });
+  });
+}
+
+// ── Task checklist ─────────────────────────────────────────────────────────────
+
+function renderTaskList(tasks) {
+  const div = document.getElementById('task-list');
+  div.innerHTML = '<h3>Your Tasks</h3>' +
+    tasks.map((t, i) => `
+      <div class="task-item" id="task-${i}">
+        <input type="checkbox" id="tc-${i}">
+        <label for="tc-${i}">${t}</label>
+      </div>`).join('');
+  div.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.closest('.task-item').classList.toggle('done', cb.checked);
+    });
+  });
+}
+
+function checkLastTask() {
+  const items = document.querySelectorAll('.task-item');
+  if (!items.length) return;
+  const last = items[items.length - 1];
+  const cb = last.querySelector('input');
+  if (cb && !cb.checked) { cb.checked = true; last.classList.add('done'); }
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────────
+
 function addMessage(text, who) {
-  const div = document.createElement("div");
+  const div = document.createElement('div');
   div.className = `msg ${who}`;
   div.textContent = text;
-  document.getElementById("messages").appendChild(div);
-  div.scrollIntoView();
+  document.getElementById('messages').appendChild(div);
+  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
 function addCorrection(text) {
-  const div = document.createElement("div");
-  div.className = "card";
+  const empty = document.querySelector('.empty-hint');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'card';
   div.textContent = text;
-  document.getElementById("corrections").prepend(div);
+  document.getElementById('corrections').prepend(div);
 }
 
-// 录音:Web Speech 转写 + MediaRecorder 抓音频,松手时一并发送
-const recBtn = document.getElementById("record-btn");
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const recognition = SR ? new SR() : null;
-if (recognition) { recognition.lang = "en-US"; recognition.interimResults = false; }
+// ── Recording ──────────────────────────────────────────────────────────────────
 
-recBtn.addEventListener("mousedown", startRec);
-recBtn.addEventListener("mouseup", stopRec);
+const recBtn = document.getElementById('record-btn');
+recBtn.addEventListener('mousedown', startRec);
+recBtn.addEventListener('mouseup', stopRec);
+recBtn.addEventListener('touchstart', e => { e.preventDefault(); startRec(); });
+recBtn.addEventListener('touchend', e => { e.preventDefault(); stopRec(); });
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat && e.target === document.body && !recording) {
+    e.preventDefault(); startRec();
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space' && recording) { e.preventDefault(); stopRec(); }
+});
 
 async function startRec() {
-  recBtn.classList.add("recording");
-  recognizing = ""; chunks = []; sttStart = performance.now();
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = e => chunks.push(e.data);
-  mediaRecorder.start();
+  if (recording || !ws || !sessionId) return;
+  recording = true;
+  recBtn.classList.add('recording');
+  recBtn.textContent = '🔴 Recording…';
+  setStatus('');
+  recognizing = ''; chunks = []; sttStart = performance.now();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.start();
+  } catch {
+    setStatus('麦克风权限被拒绝'); recording = false; recBtn.classList.remove('recording');
+    recBtn.textContent = '🎤 按住说话'; return;
+  }
   if (recognition) {
     recognition.onresult = e => { recognizing = e.results[0][0].transcript; };
-    recognition.start();
+    recognition.onerror = () => {};
+    try { recognition.start(); } catch {}
   }
 }
 
 async function stopRec() {
-  recBtn.classList.remove("recording");
-  if (recognition) recognition.stop();
+  if (!recording) return;
+  recording = false;
+  recBtn.classList.remove('recording');
+  recBtn.textContent = '🎤 按住说话';
+  if (recognition) { try { recognition.stop(); } catch {} }
   if (mediaRecorder) mediaRecorder.stop();
-  await new Promise(r => setTimeout(r, 300)); // 等转写与音频收尾
+  await new Promise(r => setTimeout(r, 350));
   const sttMs = performance.now() - sttStart;
-  const blob = new Blob(chunks, { type: "audio/webm" });
+  const blob = new Blob(chunks, { type: 'audio/webm' });
   const audioB64 = await blobToB64(blob);
   const text = recognizing.trim();
-  if (!text) { document.getElementById("status").textContent = "没听清,重试"; return; }
-  addMessage(text, "user");
-  ws.send(JSON.stringify({ type: "turn", text, audio_b64: audioB64, stt_ms: sttMs }));
+  if (!text) { setStatus('没听清，请重试'); return; }
+  addMessage(text, 'user');
+  setStatus('等待回复…');
+  ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
 }
 
 function blobToB64(blob) {
   return new Promise(res => {
     const r = new FileReader();
-    r.onloadend = () => res(r.result.split(",")[1]);
+    r.onloadend = () => res(r.result.split(',')[1]);
     r.readAsDataURL(blob);
   });
 }
 
+// ── Server messages ────────────────────────────────────────────────────────────
+
 function onServerMessage(ev) {
   const m = JSON.parse(ev.data);
-  if (m.error) return;
-  addMessage(m.assistant_text, "assistant");
-  if (m.inline_correction) addCorrection("即时:" + m.inline_correction);
-  if (m.audio_b64) new Audio("data:audio/mp3;base64," + m.audio_b64).play();
-  if (m.goal_reached) document.getElementById("status").textContent = "🎉 点餐完成,可结束课程";
+  if (m.error) { setStatus('错误: ' + m.error); return; }
+  setStatus('');
+  addMessage(m.assistant_text, 'assistant');
+  if (m.inline_correction) addCorrection('即时: ' + m.inline_correction);
+  if (m.audio_b64) new Audio('data:audio/mp3;base64,' + m.audio_b64).play();
+  if (m.goal_reached) {
+    setStatus('🎉 场景完成！可以结束课程了');
+    checkLastTask();
+  }
 }
 
-document.getElementById("finish-btn").addEventListener("click", finish);
+// ── Back button ────────────────────────────────────────────────────────────────
 
-async function finish() {
-  const s = await (await fetch(`/api/session/${sessionId}/finish`, { method: "POST" })).json();
-  document.getElementById("summary-panel").classList.remove("hidden");
-  document.getElementById("scores").innerHTML =
-    `综合 <b>${s.overall_score}</b> | 发音 ${s.sub_scores.pronunciation} | ` +
-    `流利 ${s.sub_scores.fluency} | 语法 ${s.sub_scores.grammar}`;
-  document.getElementById("word-scores").innerHTML = s.word_scores.map(w => {
-    const hue = Math.round(w.score * 1.2); // 0→红 120→绿
-    return `<span class="word" style="background:hsl(${hue},70%,45%)">${w.word} ${w.score}</span>`;
-  }).join("");
-  document.getElementById("comment").textContent = s.llm_comment;
+document.getElementById('back-btn').addEventListener('click', () => {
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  sessionId = null; currentScenario = null;
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('corrections').innerHTML = '<p class="empty-hint">对话后显示纠错建议</p>';
+  document.getElementById('summary-panel').classList.add('hidden');
+  document.getElementById('session-view').classList.add('hidden');
+  document.getElementById('picker').classList.remove('hidden');
+});
+
+// ── Finish / Summary ───────────────────────────────────────────────────────────
+
+document.getElementById('finish-btn').addEventListener('click', async () => {
+  if (!sessionId) return;
+  document.getElementById('finish-btn').disabled = true;
+  setStatus('生成总结中…');
+  try {
+    const s = await (await fetch(`/api/session/${sessionId}/finish`, { method: 'POST' })).json();
+    renderSummary(s);
+  } catch {
+    setStatus('总结生成失败');
+  } finally {
+    document.getElementById('finish-btn').disabled = false;
+    setStatus('');
+  }
+});
+
+function renderSummary(s) {
+  document.getElementById('summary-panel').classList.remove('hidden');
+  document.getElementById('scores').innerHTML =
+    `综合 <b>${s.overall_score}</b> &nbsp;|&nbsp; ` +
+    `发音 ${s.sub_scores.pronunciation} &nbsp;|&nbsp; ` +
+    `流利 ${s.sub_scores.fluency} &nbsp;|&nbsp; ` +
+    `语法 ${s.sub_scores.grammar}`;
+  document.getElementById('word-scores').innerHTML = s.word_scores.map(w => {
+    const hue = Math.round(w.score * 1.2);
+    return `<span class="word" style="background:hsl(${hue},65%,42%)">${w.word} ${w.score}</span>`;
+  }).join('');
+  document.getElementById('comment').textContent = s.llm_comment;
+  document.getElementById('summary-panel').scrollIntoView({ behavior: 'smooth' });
   const t = s.timing_breakdown;
-  new Chart(document.getElementById("timing-chart"), {
-    type: "bar",
-    data: { labels: ["STT", "LLM", "TTS", "总计"],
-      datasets: [{ label: "平均耗时 (ms)",
+  new Chart(document.getElementById('timing-chart'), {
+    type: 'bar',
+    data: {
+      labels: ['STT', 'LLM', 'TTS', '总计'],
+      datasets: [{ label: '平均耗时 (ms)',
         data: [t.stt_avg, t.llm_avg, t.tts_avg, t.total_avg],
-        backgroundColor: ["#5b9", "#2b5cff", "#e8a13a", "#888"] }] },
-    options: { plugins: { title: { display: true, text: "延迟分解(流畅性)" } } },
+        backgroundColor: ['#5b9', '#2b5cff', '#e8a13a', '#888'] }],
+    },
+    options: { plugins: { title: { display: true, text: '延迟分解 (ms)' } }, scales: { y: { beginAtZero: true } } },
   });
 }
 
-init();
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+
+initPicker();

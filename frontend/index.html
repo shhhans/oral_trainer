@@ -3,31 +3,64 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>口语陪练 · 点餐</title>
+  <title>英语口语陪练</title>
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 </head>
 <body>
-  <header><h1>英语口语陪练 · 餐厅点餐</h1></header>
+
+<!-- ── Scenario Picker ─────────────────────────── -->
+<div id="picker">
+  <div class="picker-header">
+    <h1>🎙 英语口语陪练</h1>
+    <p>选择一个场景，开始练习</p>
+  </div>
+  <div id="scenario-grid"><!-- filled by JS --></div>
+</div>
+
+<!-- ── Session View ────────────────────────────── -->
+<div id="session-view" class="hidden">
+  <header id="session-header">
+    <button id="back-btn" title="换场景">← 返回</button>
+    <h1 id="session-title"></h1>
+    <span id="session-badge"></span>
+    <button id="finish-btn">结束课程</button>
+  </header>
+
   <main>
-    <section id="menu-panel"><h2>Menu</h2><ul id="menu-list"></ul></section>
+    <!-- Left: scenario guide + task checklist -->
+    <section id="guide-panel">
+      <div id="guide-content"></div>
+      <div id="task-list"></div>
+    </section>
+
+    <!-- Centre: chat -->
     <section id="chat-panel">
       <div id="messages"></div>
       <div id="controls">
-        <button id="record-btn">按住说话</button>
-        <button id="finish-btn">结束课程</button>
+        <button id="record-btn">🎤 按住说话</button>
         <span id="status"></span>
+        <span id="kb-hint">或按 <kbd>Space</kbd></span>
       </div>
     </section>
-    <section id="correction-panel"><h2>纠错</h2><div id="corrections"></div></section>
+
+    <!-- Right: corrections -->
+    <section id="correction-panel">
+      <h2>即时纠错</h2>
+      <div id="corrections"><p class="empty-hint">对话后显示纠错建议</p></div>
+    </section>
   </main>
+
+  <!-- Summary (appears below after finish) -->
   <section id="summary-panel" class="hidden">
-    <h2>课后总结</h2>
+    <h2>📊 课后总结</h2>
     <div id="scores"></div>
     <div id="word-scores"></div>
-    <canvas id="timing-chart"></canvas>
+    <canvas id="timing-chart" height="80"></canvas>
     <p id="comment"></p>
   </section>
-  <script src="/static/app.js"></script>
+</div>
+
+<script src="/static/app.js"></script>
 </body>
 </html>

@@ -88,11 +88,8 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/api/menu")
     def get_menu():
-        ordering = SCENARIOS.get("ordering")
-        if ordering and ordering.props:
-            lines = [ln.lstrip("- ") for ln in ordering.props[0].detail.splitlines() if ln.strip()]
-            return [{"item": ln} for ln in lines]
-        return []
+        from app.scenarios.ordering import DEFAULT_MENU
+        return [{"name": m.name, "price": m.price, "desc": m.desc} for m in DEFAULT_MENU]
 
     @app.get("/api/sessions")
     def list_sessions(limit: int = 50):
