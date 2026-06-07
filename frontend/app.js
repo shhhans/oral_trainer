@@ -288,13 +288,12 @@ let sessionId = null, currentScenario = null, ws = null;
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
 let micStream = null;  // 共享的 getUserMedia 流:MediaRecorder(发音评分)与 ASR 采集复用
-// 服务端实时 ASR(DashScope)状态。asrAvailable 由 /api/health 能力探测决定;
-// 不可用时回退浏览器 Web Speech。usingAsr 标记"本次录音"是否真的走了 ASR。
-let asrAvailable = false, usingAsr = false;
+// ASR-only 实验分支:转写仅使用服务端 DashScope,不启用浏览器 Web Speech。
+let asrAvailable = false;
 let asrWs = null, asrCtx = null, asrNode = null;
 let asrFinalText = '', asrFinalResolve = null;
 
-// 启动时探测后端是否配置了 DashScope，决定转写走服务端实时 ASR 还是浏览器 Web Speech。
+// 启动时探测后端是否配置了 DashScope。
 async function probeAsrCapability() {
   try {
     const h = await (await fetch('/api/health')).json();
@@ -306,10 +305,6 @@ probeAsrCapability();
 // Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
 // 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
 let audioPlayer = null, lastAudioB64 = null;
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const recognition = SR ? new SR() : null;
-if (recognition) { recognition.lang = 'en-US'; recognition.interimResults = false; }
-
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -477,7 +472,14 @@ async function startRec() {
   recBtn.textContent = '🔴 Recording…';
   setStatus('');
   primeAudio();  // 在用户手势内解锁音频,确保稍后异步回复能正常播放
-  recognizing = ''; chunks = []; sttStart = performance.now(); usingAsr = false;
+  recognizing = ''; chunks = []; sttStart = performance.now();
+  if (!asrAvailable) {
+    recording = false;
+    recBtn.classList.remove('recording');
+    recBtn.textContent = '🎤 按住说话';
+    setStatus('服务端 ASR 不可用，请检查 DashScope 配置');
+    return;
+  }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(micStream);  // webm:供后端发音评分,与转写无关
@@ -487,14 +489,17 @@ async function startRec() {
     setStatus('麦克风权限被拒绝'); recording = false; recBtn.classList.remove('recording');
     recBtn.textContent = '🎤 按住说话'; return;
   }
-  // 优先服务端实时 ASR;启动失败(连接/Worklet 等)则就地回退浏览器 Web Speech。
-  if (asrAvailable) {
-    try { await startAsrStream(); usingAsr = true; } catch { usingAsr = false; }
-  }
-  if (!usingAsr && recognition) {
-    recognition.onresult = e => { recognizing = e.results[0][0].transcript; };
-    recognition.onerror = () => {};
-    try { recognition.start(); } catch {}
+  try {
+    await startAsrStream();
+  } catch {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try { mediaRecorder.stop(); } catch {}
+    }
+    stopMic();
+    recording = false;
+    recBtn.classList.remove('recording');
+    recBtn.textContent = '🎤 按住说话';
+    setStatus('服务端 ASR 启动失败，请检查连接后重试');
   }
 }
 
@@ -505,14 +510,7 @@ async function stopRec() {
   recBtn.textContent = '🎤 按住说话';
   if (mediaRecorder) mediaRecorder.stop();
 
-  let text;
-  if (usingAsr) {
-    text = (await stopAsrStream()).trim();
-  } else {
-    if (recognition) { try { recognition.stop(); } catch {} }
-    await new Promise(r => setTimeout(r, 350));
-    text = recognizing.trim();
-  }
+  const text = (await stopAsrStream()).trim();
   stopMic();
   const sttMs = performance.now() - sttStart;
   const blob = new Blob(chunks, { type: 'audio/webm' });
