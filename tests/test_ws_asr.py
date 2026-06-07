@@ -65,6 +65,7 @@ def test_ws_asr_streams_partials_then_final(tmp_path, monkeypatch):
 
     received = []
     with client.websocket_connect(f"/ws/asr/{sid}") as ws:
+        assert ws.receive_json() == {"type": "ready"}
         for _ in range(3):
             ws.send_bytes(b"\x00\x01")
             received.append(ws.receive_json())

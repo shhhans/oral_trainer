@@ -192,6 +192,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         partials: queue.Queue = queue.Queue()
         sess = DashscopeStreamingSession(
             on_partial=partials.put, recognizer_factory=services.asr_factory)
+        await ws.send_json({"type": "ready"})
 
         async def drain_partials():
             while not partials.empty():
