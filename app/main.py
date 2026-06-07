@@ -199,6 +199,13 @@ def create_app(services: Services | None = None) -> FastAPI:
             return JSONResponse({"error": "not found"}, status_code=404)
         return summary.model_dump()
 
+    @app.get("/api/session/{session_id}/status")
+    def get_session_status(session_id: str):
+        status = storage.get_session_status(session_id)
+        if status is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return status
+
     @app.get("/api/session/{session_id}/timing")
     def get_timing(session_id: str):
         session = storage.get_session(session_id)

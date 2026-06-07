@@ -294,3 +294,13 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Rationale**: The summary already returns all word scores, but unsorted and without deduplication. A focused "weakest words" view lets students see exactly what to practice without parsing a large array. Useful for spaced-repetition flashcard integration.
 
+---
+
+## DD-15 — `GET /api/session/{id}/status`
+
+**Branch**: feat/session-status-endpoint
+
+**Decision**: Lightweight status endpoint that returns session metadata and `turn_count` without deserializing any turn JSON. Uses a COUNT query instead of loading all turns.
+
+**Rationale**: `GET /api/session/{id}/summary` and `GET /api/session/{id}/turns` both load all turn data. Polling for session completion (e.g., waiting for finish()) doesn't need turn data — just `status` and `turn_count`. The lightweight query avoids O(turns) JSON deserialization on every poll.
+

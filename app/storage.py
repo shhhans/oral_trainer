@@ -57,6 +57,27 @@ class Storage:
         s.turns = [Turn.model_validate_json(r["data"]) for r in turn_rows]
         return s
 
+    def get_session_status(self, session_id: str) -> dict | None:
+        """Return lightweight session status (no turns deserialized)."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id, scenario, status, created_at, completed_at FROM sessions WHERE id=?",
+                (session_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            turn_count = c.execute(
+                "SELECT COUNT(*) FROM turns WHERE session_id=?", (session_id,)
+            ).fetchone()[0]
+        return {
+            "session_id": row["id"],
+            "scenario": row["scenario"],
+            "status": row["status"],
+            "turn_count": turn_count,
+            "created_at": row["created_at"],
+            "completed_at": row["completed_at"],
+        }
+
     def save_audio(self, session_id: str, turn_id: str, data: bytes, suffix: str) -> str:
         d = os.path.join(self.audio_dir, session_id)
         os.makedirs(d, exist_ok=True)
