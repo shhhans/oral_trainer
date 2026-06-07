@@ -278,3 +278,19 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Alternatives considered**: Per-session system_prompt stored in DB — too flexible and untestable. Single prompt with difficulty variable injection — complex prompt, less predictable behavior.
 
+---
+
+## DD-14 — `GET /api/session/{id}/weak-words`
+
+**Branch**: feat/weak-words-endpoint
+
+**Decision**: Returns the N lowest-scoring words aggregated across all turns (averaged by word, sorted ascending by score, with occurrence count). Default N=5.
+
+**Implementation**:
+- Collects `WordScore` objects from all turns with pronunciation data
+- Groups by `word.lower()` to handle capitalisation
+- Averages scores for repeated words, records occurrence count
+- Sorts ascending and returns first N entries
+
+**Rationale**: The summary already returns all word scores, but unsorted and without deduplication. A focused "weakest words" view lets students see exactly what to practice without parsing a large array. Useful for spaced-repetition flashcard integration.
+
