@@ -12,10 +12,11 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.models import Session
 from app.storage import Storage
-from app.scenarios.ordering import load_menu, build_system_prompt
+from app.scenarios.ordering import load_menu_or_default, build_system_prompt
 from app.services.dialogue import DialogueService
 from app.services.analysis import analyze_turn, build_summary
 from app.services.timing import StepTimer, aggregate_timings
+from app.services.audio import to_wav_16k
 from app.services.llm import LlmService
 from app.services.tts import TtsService
 from app.services.pron import PronService
@@ -43,7 +44,7 @@ def default_services() -> Services:
 def create_app(services: Services | None = None) -> FastAPI:
     services = services or default_services()
     storage = Storage(db_path=services.db_path, audio_dir=services.audio_dir)
-    menu = load_menu(MENU_PATH) if os.path.exists(MENU_PATH) else []
+    menu = load_menu_or_default(MENU_PATH)  # 文件缺失时回退内置菜单,新检出也能用
     system_prompt = build_system_prompt(menu)
     dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=system_prompt)
 
@@ -81,10 +82,14 @@ def create_app(services: Services | None = None) -> FastAPI:
 
                 user_text = (data.get("text") or "").strip()
                 timer = StepTimer()
+                # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
+                # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
                 with timer.measure("total"):
-                    turn = dialogue.run_turn(session, user_text=user_text)
+                    turn = await asyncio.to_thread(
+                        dialogue.run_turn, session, user_text=user_text)
                     with timer.measure("tts"):
-                        audio = services.tts.synthesize(turn.assistant_text)
+                        audio = await asyncio.to_thread(
+                            services.tts.synthesize, turn.assistant_text)
 
                 # 落盘音频 + 计时回填
                 turn.assistant_audio_path = storage.save_audio(
@@ -100,9 +105,12 @@ def create_app(services: Services | None = None) -> FastAPI:
                     raw = base64.b64decode(audio_b64_in)
                     turn.user_audio_path = storage.save_audio(
                         session_id, turn.id + "_user", raw, suffix=".webm")
-                    # 真实环境此处应先 audio.to_wav_16k(raw, "webm");测试用 fake pron 不解析内容,
-                    # 故保留 raw 以免单测依赖 ffmpeg。接真 SpeechAce 时改为转码。
-                    wav_bytes = raw
+                    # 浏览器 MediaRecorder 出的是 webm/opus,SpeechAce 要 16k wav,必须转码。
+                    # 转码失败(空/损坏音频,如测试桩)则跳过本轮发音测评。
+                    try:
+                        wav_bytes = to_wav_16k(raw, "webm")
+                    except Exception:  # noqa: BLE001
+                        wav_bytes = None
                 storage.save_turn(turn)
 
                 # 后台异步分析(发音 + 纠错),不阻塞回包
@@ -148,7 +156,10 @@ def create_app(services: Services | None = None) -> FastAPI:
 
 
 async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage):
-    analyze_turn(turn, wav_bytes, pron=services.pron, llm=services.llm, storage=storage)
+    # analyze_turn 内含同步发音/纠错 HTTP 调用,丢到 worker 线程避免阻塞 event loop
+    await asyncio.to_thread(
+        analyze_turn, turn, wav_bytes, services.pron, services.llm, storage)
 
 
-app = create_app() if os.getenv("ORAL_TRAINER_BOOT") else None
+# 模块级导出,支持 `uvicorn app.main:app` 直接启动
+app = create_app()

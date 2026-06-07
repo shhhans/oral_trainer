@@ -1,19 +1,16 @@
 """爬一份真实餐厅菜单 → resources/menu.json。
 合规:只抓公开菜单页、低频、结果缓存本地,跑一次即可。抓取失败回退内置静态菜单。
 用法:python scripts/scrape_menu.py [URL]"""
+import dataclasses
 import json
 import os
 import sys
 import requests
 from bs4 import BeautifulSoup
+from app.scenarios.ordering import DEFAULT_MENU
 
-FALLBACK_MENU = [
-    {"name": "Classic Burger", "price": "$9.50", "desc": "beef patty, lettuce, tomato, cheese"},
-    {"name": "Caesar Salad", "price": "$7.00", "desc": "romaine, croutons, parmesan"},
-    {"name": "Margherita Pizza", "price": "$11.00", "desc": "tomato, mozzarella, basil"},
-    {"name": "Latte", "price": "$4.00", "desc": "espresso with steamed milk"},
-    {"name": "Cheesecake", "price": "$6.00", "desc": "New York style, berry topping"},
-]
+# 复用场景模块的内置菜单作为抓取失败兜底(单一来源,DRY)
+FALLBACK_MENU = [dataclasses.asdict(m) for m in DEFAULT_MENU]
 
 OUT_PATH = os.path.join("resources", "menu.json")
 

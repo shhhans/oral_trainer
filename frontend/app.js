@@ -7,7 +7,9 @@ async function init() {
   document.getElementById("menu-list").innerHTML =
     menu.map(m => `<li><b>${m.name}</b> <span>${m.price}</span><br><small>${m.desc}</small></li>`).join("");
   sessionId = (await (await fetch("/api/session", { method: "POST" })).json()).id;
-  ws = new WebSocket(`ws://${location.host}/ws/${sessionId}`);
+  // HTTPS 页面必须用 wss,否则浏览器按混合内容拦截 ws://
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${wsProto}//${location.host}/ws/${sessionId}`);
   ws.onmessage = onServerMessage;
 }
 
