@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
@@ -67,10 +67,12 @@ def create_app(services: Services | None = None) -> FastAPI:
         return [m.__dict__ for m in menu]
 
     @app.post("/api/session")
-    def create_session():
+    def create_session(dialect: str = Query(default="en-us",
+                                            pattern="^(en-us|en-gb)$")):
         sid = uuid.uuid4().hex[:12]
-        storage.save_session(Session(id=sid, scenario="ordering", created_at=time.time()))
-        return {"id": sid}
+        storage.save_session(Session(id=sid, scenario="ordering",
+                                     dialect=dialect, created_at=time.time()))
+        return {"id": sid, "dialect": dialect}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
@@ -91,13 +93,15 @@ def create_app(services: Services | None = None) -> FastAPI:
                 timer = StepTimer()
                 # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
                 # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
+                from app.services.tts import get_voice_for_dialect
+                voice = get_voice_for_dialect(session.dialect)
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,
                         inline_hint=inline_hint)
                     with timer.measure("tts"):
                         audio = await asyncio.to_thread(
-                            services.tts.synthesize, turn.assistant_text)
+                            services.tts.synthesize, turn.assistant_text, voice)
 
                 # 落盘音频 + 计时回填
                 turn.assistant_audio_path = storage.save_audio(
@@ -122,7 +126,9 @@ def create_app(services: Services | None = None) -> FastAPI:
                 storage.save_turn(turn)
 
                 # 后台异步分析(发音 + 纠错),不阻塞回包
-                asyncio.create_task(_bg_analyze(turn, wav_bytes, services, storage))
+                asyncio.create_task(
+                    _bg_analyze(turn, wav_bytes, services, storage,
+                                dialect=session.dialect))
 
                 await ws.send_json({
                     "assistant_text": turn.assistant_text,
@@ -166,10 +172,12 @@ def create_app(services: Services | None = None) -> FastAPI:
     return app
 
 
-async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage):
+async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage,
+                      dialect: str = "en-us"):
     # analyze_turn 内含同步发音/纠错 HTTP 调用,丢到 worker 线程避免阻塞 event loop
     serious = await asyncio.to_thread(
-        analyze_turn, turn, wav_bytes, services.pron, services.llm, storage)
+        analyze_turn, turn, wav_bytes, services.pron, services.llm, storage,
+        dialect=dialect)
 
     if serious:
         # Build a coaching hint for the LLM (instructs the assistant, not the user directly).

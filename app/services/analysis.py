@@ -9,14 +9,16 @@ def grammar_score_from_corrections(avg_corrections: float) -> float:
     return max(0.0, 100.0 - 8.0 * avg_corrections)
 
 
-def analyze_turn(turn: Turn, wav_bytes: bytes | None, pron, llm, storage) -> list:
+def analyze_turn(turn: Turn, wav_bytes: bytes | None, pron, llm, storage,
+                 dialect: str = "en-us") -> list:
     """异步:发音测评 + 纠错，回填并存回。返回 serious_corrections 供主链路注入。
 
     serious_corrections: 仅含 type=="grammar" 且有具体建议的项，上限 2 条。
     调用方（main.py）将其格式化为 inline_hint，注入下一轮的 system prompt。
     """
     if wav_bytes is not None:
-        turn.pronunciation = pron.assess(wav_bytes, ref_text=turn.user_transcript)
+        turn.pronunciation = pron.assess(wav_bytes, ref_text=turn.user_transcript,
+                                         dialect=dialect)
     corrections = llm.correct(turn.user_transcript)
     turn.deferred_corrections = corrections
     storage.save_turn(turn)

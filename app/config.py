@@ -15,6 +15,10 @@ class Settings:
     speechace_api_key: str = os.getenv("SPEECHACE_API_KEY", "")
     # AP-SE Singapore is the default; override for other regions (eu→api4, us→api.speechace.co)
     speechace_base_url: str = os.getenv("SPEECHACE_BASE_URL", "https://api2.speechace.com")
+    # Dialect / accent settings
+    minimax_voice_en_us: str = os.getenv("MINIMAX_VOICE_EN_US", "English_Insightful_Speaker")
+    minimax_voice_en_gb: str = os.getenv("MINIMAX_VOICE_EN_GB", "English_Graceful_Lady")
+    speechace_dialect: str = os.getenv("SPEECHACE_DIALECT", "en-us")
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
 

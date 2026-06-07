@@ -1,10 +1,21 @@
-"""MiniMax TTS 封装。返回音频 bytes(wav/mp3),由调用方落盘并回传前端。"""
+"""MiniMax TTS 封装。返回音频 bytes(mp3),由调用方落盘并回传前端。
+
+dialect 参数控制英式/美式发音（通过 voice_id 实现；MiniMax 没有独立 accent 参数）。
+实际可用的 British voice ID 需通过 MINIMAX_VOICE_EN_GB 环境变量配置。
+"""
 from typing import Callable
 import httpx
 from app.config import get_settings
 
 Transport = Callable[[str, str], bytes]
-DEFAULT_VOICE = "male-qn-qingse"
+
+
+def get_voice_for_dialect(dialect: str) -> str:
+    """根据方言返回对应的 MiniMax voice_id。"""
+    s = get_settings()
+    if dialect == "en-gb":
+        return s.minimax_voice_en_gb
+    return s.minimax_voice_en_us
 
 
 def _default_transport(text: str, voice: str) -> bytes:
@@ -20,14 +31,14 @@ def _default_transport(text: str, voice: str) -> bytes:
         timeout=30.0,
     )
     resp.raise_for_status()
-    # MiniMax t2a_v2 返回 data.audio 为 hex 字符串;若文档不符只改这两行
-    audio_hex = resp.json()["data"]["audio"]
-    return bytes.fromhex(audio_hex)
+    return bytes.fromhex(resp.json()["data"]["audio"])
 
 
 class TtsService:
     def __init__(self, transport: Transport | None = None):
         self.transport = transport or _default_transport
 
-    def synthesize(self, text: str, voice: str = DEFAULT_VOICE) -> bytes:
+    def synthesize(self, text: str, voice: str | None = None) -> bytes:
+        if voice is None:
+            voice = get_voice_for_dialect("en-us")
         return self.transport(text, voice)

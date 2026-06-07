@@ -160,3 +160,14 @@ C 方案（WebSocket push）已在设计上预留，未来可作为增强。
 
 采用 A，在 system prompt 中明确用自然语言定义触发条件，并通过 `CHAT_SYSTEM_SUFFIX`
 约束 `inline_correction` 的输出条件。C 方案留作 v2 增强。
+
+---
+
+## DD-05: 方言选择（en-us / en-gb）
+
+**相关 PR**: `feat/dialect-selection`
+
+Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之切换。
+- `POST /api/session?dialect=en-gb` 存入 Session
+- `get_voice_for_dialect()` 映射 dialect → MiniMax voice_id（可通过环境变量配置）
+- `PronService.assess(..., dialect=None)` 无指定时回退到 `SPEECHACE_DIALECT` 环境变量

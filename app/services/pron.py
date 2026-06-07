@@ -2,6 +2,7 @@
 
 使用 score_text (Basic tier) 端点，以浏览器 STT 转写文本作为参考，
 对用户实际发音进行逐词评分。
+dialect 参数支持 en-us / en-gb，默认从 SPEECHACE_DIALECT 环境变量读取。
 score_speech (Premium) 已确认当前账户不可用；如升级可切换 endpoint。
 """
 from typing import Callable
@@ -9,7 +10,7 @@ import httpx
 from app.config import get_settings
 from app.models import Pronunciation, WordScore
 
-Transport = Callable[[bytes, str], dict]
+Transport = Callable[[bytes, str, str], dict]
 
 
 def normalize_speechace(raw: dict) -> Pronunciation | None:
@@ -28,11 +29,12 @@ def normalize_speechace(raw: dict) -> Pronunciation | None:
     return Pronunciation(overall=overall, accuracy=overall, fluency=fluency, words=words)
 
 
-def _default_transport(wav_bytes: bytes, ref_text: str) -> dict:
+def _default_transport(wav_bytes: bytes, ref_text: str, dialect: str) -> dict:
     s = get_settings()
     resp = httpx.post(
         f"{s.speechace_base_url}/api/scoring/text/v9/json",
-        params={"key": s.speechace_api_key, "dialect": "en-us", "user_id": "oral-trainer"},
+        params={"key": s.speechace_api_key, "dialect": dialect,
+                "user_id": "oral-trainer"},
         files={"user_audio_file": ("audio.wav", wav_bytes, "audio/wav")},
         data={"text": ref_text},
         timeout=60.0,
@@ -45,11 +47,14 @@ class PronService:
     def __init__(self, transport: Transport | None = None):
         self.transport = transport or _default_transport
 
-    def assess(self, wav_bytes: bytes, ref_text: str = "") -> Pronunciation | None:
+    def assess(self, wav_bytes: bytes, ref_text: str = "",
+               dialect: str | None = None) -> Pronunciation | None:
         if not ref_text.strip():
             return None
+        if dialect is None:
+            dialect = get_settings().speechace_dialect
         try:
-            raw = self.transport(wav_bytes, ref_text)
+            raw = self.transport(wav_bytes, ref_text, dialect)
         except httpx.HTTPError:
             return None
         return normalize_speechace(raw)
