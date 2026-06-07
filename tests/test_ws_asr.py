@@ -56,6 +56,19 @@ def test_ws_asr_unavailable_without_key(tmp_path, monkeypatch):
     assert msg == {"type": "unavailable"}
 
 
+def test_ws_asr_reports_recognizer_construction_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "k")
+
+    def failing_factory(session):
+        raise RuntimeError("recognizer unavailable")
+
+    client = make_client(tmp_path, asr_factory=failing_factory)
+    sid = client.post("/api/session").json()["id"]
+
+    with client.websocket_connect(f"/ws/asr/{sid}") as ws:
+        assert ws.receive_json() == {"type": "error"}
+
+
 def test_ws_asr_streams_partials_then_final(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "k")
     script = ["I", "I want", "I want tea"]
