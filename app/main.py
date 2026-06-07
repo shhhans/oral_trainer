@@ -152,6 +152,25 @@ def create_app(services: Services | None = None) -> FastAPI:
             return JSONResponse({"error": "not found"}, status_code=404)
         return aggregate_timings(session.turns).model_dump()
 
+    @app.get("/api/session/{session_id}/weak-words")
+    def get_weak_words(session_id: str, n: int = 5):
+        session = storage.get_session(session_id)
+        if session is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        # Aggregate word scores across turns: average score per unique word.
+        totals: dict[str, list[float]] = {}
+        for turn in session.turns:
+            if turn.pronunciation:
+                for ws in turn.pronunciation.words:
+                    totals.setdefault(ws.word.lower(), []).append(ws.score)
+        averaged = [
+            {"word": w, "avg_score": round(sum(scores) / len(scores), 1),
+             "occurrences": len(scores)}
+            for w, scores in totals.items()
+        ]
+        averaged.sort(key=lambda x: x["avg_score"])
+        return averaged[:n]
+
     return app
 
 
