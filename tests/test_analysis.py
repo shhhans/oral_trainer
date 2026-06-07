@@ -41,3 +41,28 @@ def test_build_summary_aggregates():
     assert summary.timing_breakdown.samples == 2
     assert 0 <= summary.overall_score <= 100
     assert summary.llm_comment == "总评"
+
+
+def test_build_summary_no_pronunciation_uses_grammar_only():
+    """When no pronunciation data exists overall score must equal grammar score."""
+    s = Session(id="s2", scenario="ordering", created_at=time.time())
+    s.turns = [
+        Turn(id="t1", session_id="s2", index=0, user_transcript="I want coffee",
+             pronunciation=None, deferred_corrections=[], timings=Timings()),
+    ]
+    summary = build_summary(s, llm=FakeLlm())
+    assert summary.sub_scores.pronunciation == 0.0
+    # No pronunciation → overall = grammar (no corrections → grammar=100)
+    assert summary.overall_score == summary.sub_scores.grammar
+
+
+def test_build_summary_no_pronunciation_does_not_penalize():
+    """overall_score without pronunciation data should not be near-zero."""
+    s = Session(id="s3", scenario="ordering", created_at=time.time())
+    s.turns = [
+        Turn(id="t1", session_id="s3", index=0, user_transcript="I want coffee",
+             pronunciation=None, deferred_corrections=[], timings=Timings()),
+    ]
+    summary = build_summary(s, llm=FakeLlm())
+    # Grammar with no corrections = 100 → overall should be high, not near-zero
+    assert summary.overall_score >= 75

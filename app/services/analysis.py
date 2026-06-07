@@ -41,11 +41,17 @@ def build_summary(session: Session, llm) -> Summary:
         if t.pronunciation:
             word_scores.extend(t.pronunciation.words)
 
-    overall = round(0.5 * pron_overall + 0.3 * fluency + 0.2 * grammar, 1)
+    # If no pronunciation data was collected, exclude pron/fluency from overall
+    # to avoid unfairly zeroing the score (e.g. browser STT unavailable).
+    has_pron = any(t.pronunciation for t in turns)
+    if has_pron:
+        overall = round(0.5 * pron_overall + 0.3 * fluency + 0.2 * grammar, 1)
+    else:
+        overall = grammar
 
     weak = []
-    if pron_overall < 75: weak.append("发音")
-    if fluency < 75: weak.append("流利度")
+    if has_pron and pron_overall < 75: weak.append("发音")
+    if has_pron and fluency < 75: weak.append("流利度")
     if grammar < 75: weak.append("语法")
     comment = llm.summarize_comment(overall=overall, weak_points=weak)
 
