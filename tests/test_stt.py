@@ -56,6 +56,25 @@ def test_streaming_session_emits_partials_and_final():
     assert result.source == "dashscope"
 
 
+def test_streaming_session_aggregates_completed_sentences():
+    partials = []
+    sess = DashscopeStreamingSession(
+        on_partial=partials.append,
+        recognizer_factory=_factory([]),
+    )
+
+    sess._on_text("I want a latte", sentence_end=True)
+    sess._on_text("And", sentence_end=False)
+    sess._on_text("And a muffin", sentence_end=True)
+
+    assert partials == [
+        "I want a latte",
+        "I want a latte And",
+        "I want a latte And a muffin",
+    ]
+    assert sess.final().text == "I want a latte And a muffin"
+
+
 def test_streaming_session_starts_recognizer_on_construct():
     captured = {}
 
