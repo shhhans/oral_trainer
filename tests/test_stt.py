@@ -115,3 +115,31 @@ def test_streaming_session_final_is_idempotent():
     sess.final()
     sess.final()  # 第二次不应再次 stop / 报错
     assert rec_holder["rec"].stopped is True
+
+
+def test_streaming_session_final_stays_idempotent_when_stop_fails():
+    class FailingStopRecognizer(FakeRecognizer):
+        def __init__(self, session):
+            super().__init__(session, [])
+            self.stop_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+            raise RuntimeError("stop failed")
+
+    rec_holder = {}
+
+    def factory(session):
+        rec = FailingStopRecognizer(session)
+        rec_holder["rec"] = rec
+        return rec
+
+    sess = DashscopeStreamingSession(
+        on_partial=lambda text: None,
+        recognizer_factory=factory,
+    )
+    sess._on_text("hello")
+
+    assert sess.final().text == "hello"
+    assert sess.final().text == "hello"
+    assert rec_holder["rec"].stop_calls == 1

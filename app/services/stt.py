@@ -80,8 +80,11 @@ class DashscopeStreamingSession:
     def final(self) -> SttResult:
         """停止识别并返回最终聚合文本。可重复调用(幂等)。"""
         if not self._stopped:
-            self._recognizer.stop()
             self._stopped = True
+            try:
+                self._recognizer.stop()
+            except Exception:  # noqa: BLE001
+                pass
         return SttResult(text=self._aggregate(), source="dashscope")
 
 
