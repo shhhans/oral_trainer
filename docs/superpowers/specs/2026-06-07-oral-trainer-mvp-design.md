@@ -14,9 +14,9 @@
 
 | 环节 | 选型 | 说明 |
 |------|------|------|
-| 主链路 STT(对话用) | 通义 DashScope Paraformer 实时 ASR | MiniMax 无公开独立 ASR;`stt` 做 provider 抽象,确认 MiniMax 有 ASR 后可切换 |
+| 主链路 STT(对话用) | **浏览器 Web Speech API**(MVP 默认) | STT 在浏览器本地跑,零网络往返、免 key、延迟最低;限 Chrome、质量一般。通义 Paraformer 作为 provider 抽象后的后端备选(已有 DashScope key) |
 | 发音测评 | SpeechAce(spontaneous 自由说接口) | 暂用;Azure Pronunciation Assessment key 到位后无缝替换 |
-| 对话 LLM / 纠错 / 总结 | MiniMax LLM | 国内低延迟;结构化输出 |
+| 对话 LLM / 纠错 / 总结 | MiniMax M2(结构化输出) | 国内低延迟;M2 系列支持结构化输出 |
 | TTS 语音回复 | MiniMax TTS | 国内第一梯队音质 |
 | 后端 | Python + FastAPI | AI/语音生态最顺 |
 | 前端 | Web(简单 playground 单页) | press-to-talk 录音、对话、纠错卡、总结页 |
@@ -28,13 +28,13 @@
 
 ```
 浏览器(Web playground)
-  │  录音(press-to-talk, MediaRecorder)
+  │  录音(press-to-talk, MediaRecorder)+ Web Speech API 本地 STT
   ▼
 WebSocket ──► FastAPI 后端 orchestrator(dialogue.py)
-                 │
+                 │  (收到:转写文本 + 音频段)
    ┌─────────────┼──────────────────────────────┐
    ▼ 主链路(同步,低延迟)                         ▼ 副链路(异步,不阻塞)
-  通义 ASR ─► 文本                              SpeechAce 发音测评(同段音频)
+  文本(浏览器已转写)                            SpeechAce 发音测评(同段音频)
      │                                          MiniMax 细颗粒语法/用词纠错卡
   MiniMax LLM(结构化:reply/inline_correction/goal_reached)
      │
@@ -48,10 +48,10 @@ WebSocket ──► FastAPI 后端 orchestrator(dialogue.py)
 
 ### 主链路(同步,追求低延迟)
 
-1. 浏览器 press-to-talk 录音,经 WebSocket 把音频段发给后端。
-2. 后端音频转码(webm/opus → 16k PCM wav)。
-3. 通义 ASR → 识别文本。
-4. MiniMax LLM 调用,**结构化输出** `{reply, inline_correction?, goal_reached}`:
+1. 浏览器 press-to-talk:Web Speech API 本地转写出文本,同时 MediaRecorder 录下音频段;经 WebSocket 把**文本 + 音频段**发给后端。
+2. 后端音频转码(webm/opus → 16k PCM wav),供副链路 SpeechAce 用。
+3. 主链路直接拿到浏览器转写文本(无需后端 STT);通义 Paraformer 作为后端备选 provider,默认不走。
+4. MiniMax M2 LLM 调用,**结构化输出** `{reply, inline_correction?, goal_reached}`:
    - prompt 含场景角色(服务员)+ 真实菜单 + 对话历史 + `inline_correction` 槽位指令。
    - 指令:仅当用户犯了**严重/影响理解**的错误时,在回复中自然轻点纠正,填 `inline_correction`;否则正常对话。
    - `goal_reached` 用于终止判定(点餐完成)。
@@ -77,7 +77,7 @@ WebSocket ──► FastAPI 后端 orchestrator(dialogue.py)
 | 模块 | 职责 | 依赖 |
 |------|------|------|
 | `app/main.py` | FastAPI 应用 + WebSocket 端点 + 静态前端 | dialogue, storage |
-| `app/services/stt.py` | STT provider 抽象 + 通义 Paraformer 实现 | 通义 SDK |
+| `app/services/stt.py` | STT provider 抽象;MVP 默认浏览器 Web Speech(后端透传文本),通义 Paraformer 作为后端备选实现 | 通义 SDK(备选) |
 | `app/services/pron.py` | 发音测评 provider 抽象 + SpeechAce 实现 | SpeechAce API |
 | `app/services/llm.py` | MiniMax 对话封装,结构化输出解析 | MiniMax API |
 | `app/services/tts.py` | MiniMax TTS 封装 | MiniMax API |
@@ -121,7 +121,7 @@ Summary(课程结束聚合)
 
 ## 6. 耗时日志与流畅性反馈
 
-- `timing.py` 对每轮的 STT / LLM / TTS / 端到端各步打点,写入 `Turn.timings`。
+- `timing.py` 对每轮的 STT(浏览器端上报)/ LLM / TTS / 端到端各步打点,写入 `Turn.timings`。
 - 提供聚合接口 `GET /api/session/{id}/timing` 返回各步均值/分位。
 - 前端总结页用该数据画**延迟分解图**(堆叠柱状或分段条),直接呼应"流畅性"评价维度。
 
@@ -160,11 +160,11 @@ Summary(课程结束聚合)
 
 **做**:点餐单场景全链路、press-to-talk 录音、两级纠错(inline + deferred)、发音测评(SpeechAce 异步)、耗时日志 + 延迟图、真实菜单 resource、课后总结 + 词级发音可视化、简单 playground。
 
-**不做(预留扩展)**:多场景切换 UI(配置化预留)、连续 VAD、流式 STT/TTS(先 press-to-talk 分段,优化项)、用户账号体系、移动端、Azure 切换(provider 抽象已留)、MiniMax ASR(待确认)。
+**不做(预留扩展)**:多场景切换 UI(配置化预留)、连续 VAD、流式 STT/TTS(先 press-to-talk 分段,优化项)、用户账号体系、移动端、Azure 切换(provider 抽象已留)、通义 Paraformer 后端 STT(provider 已留,需要后端可控时启用)。
 
 ## 12. 已知技术风险
 
-1. **MiniMax 无独立 ASR**:主链路 STT 用通义 Paraformer;若后续确认 MiniMax 有 ASR 再切。
+1. **浏览器 Web Speech API 限制**:仅 Chrome 系、识别质量一般、后端拿不到置信度;若 demo 环境受限,切后端通义 Paraformer(provider 已留,已有 key)。
 2. **音频格式转码**:浏览器 webm/opus → Azure/通义/SpeechAce 要 16k PCM wav,需 pydub/ffmpeg,最易踩坑,单列 `audio.py`。
 3. **SpeechAce 自由说延迟**:偏分析、较慢,故放副链路异步,不阻塞对话。
 4. **结构化输出稳定性**:MiniMax 结构化输出需校验/容错解析,失败时降级为纯 reply。
