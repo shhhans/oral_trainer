@@ -9,13 +9,15 @@ from app.models import LlmReply, Correction
 
 Transport = Callable[[list[dict], float], str]
 
+# 场景中立:只规定输出 JSON 格式。具体角色与目标(含 goal_reached 判定条件)
+# 由各场景的 system_prompt(ScenarioConfig.build_prompt)提供,不在此处写死。
 CHAT_SYSTEM_SUFFIX = (
     "\n\n严格只输出 JSON，格式："
-    '{"reply": "<英文对话回复，自然简短，推动点餐流程>", '
-    '"inline_correction": "<只在用户的表达会让真实服务员完全听不懂、或指向错误菜品导致点错单时，'
-    "才输出一句中文提示（示例：'你说的 X 在菜单上没有，可能想说 Y？'）。"
+    '{"reply": "<英文对话回复，自然简短，推动当前场景目标>", '
+    '"inline_correction": "<只在用户的表达会让对方完全听不懂、或造成严重误解时，'
+    "才输出一句中文提示（示例：'你说的 X 对方可能听不懂，也许想说 Y？'）。"
     "其余语法/用词小错一律 null，留给课后总结>，"
-    '"goal_reached": <顾客已确认完整订单则 true，否则 false>}'
+    '"goal_reached": <本场景目标已达成则 true，否则 false>}'
 )
 
 CORRECT_PROMPT = (
