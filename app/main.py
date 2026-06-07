@@ -105,6 +105,10 @@ def create_app(services: Services | None = None) -> FastAPI:
     def list_sessions(limit: int = 50):
         return storage.list_sessions(limit=limit)
 
+    @app.get("/api/history")
+    def list_history(limit: int = Query(default=50, ge=1, le=200)):
+        return storage.list_history(limit=limit)
+
     @app.post("/api/session")
     async def create_session(
         scenario: str = Query(default="ordering"),

@@ -54,6 +54,24 @@ def test_list_sessions(tmp_path):
     assert len(client.get("/api/sessions?limit=1").json()) == 1
 
 
+def test_history_lists_only_completed_scored_sessions(tmp_path):
+    client = make_client(tmp_path)
+    incomplete_id = client.post("/api/session").json()["id"]
+    completed_id = client.post("/api/session?scenario=hotel&dialect=en-gb").json()["id"]
+    with client.websocket_connect(f"/ws/{completed_id}") as ws:
+        ws.send_json({"type": "turn", "text": "Hello", "audio_b64": ""})
+        ws.receive_json()
+    client.post(f"/api/session/{completed_id}/finish")
+
+    history = client.get("/api/history").json()
+
+    assert [item["session_id"] for item in history] == [completed_id]
+    assert history[0]["scenario"] == "hotel"
+    assert history[0]["dialect"] == "en-gb"
+    assert history[0]["summary"]["overall_score"] >= 0
+    assert all(item["session_id"] != incomplete_id for item in history)
+
+
 def test_create_session_and_menu(tmp_path):
     synthesized = []
 

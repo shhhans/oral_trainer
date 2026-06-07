@@ -126,3 +126,29 @@ class Storage:
                 "FROM sessions ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def list_history(self, limit: int = 50) -> list[dict]:
+        """Return completed sessions with their persisted score summaries."""
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT s.id, s.scenario, s.dialect, s.difficulty,
+                          s.created_at, s.completed_at, m.data
+                   FROM sessions s
+                   JOIN summaries m ON m.session_id = s.id
+                   WHERE s.status = 'completed'
+                   ORDER BY s.completed_at DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "session_id": row["id"],
+                "scenario": row["scenario"],
+                "dialect": row["dialect"],
+                "difficulty": row["difficulty"],
+                "created_at": row["created_at"],
+                "completed_at": row["completed_at"],
+                "summary": Summary.model_validate_json(row["data"]).model_dump(),
+            }
+            for row in rows
+        ]

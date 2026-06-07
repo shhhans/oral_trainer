@@ -309,6 +309,7 @@ probeAsrCapability();
 let audioPlayer = null, audioPrimePromise = null, lastAudioSource = null;
 let idleTimer = null, idleStartedAt = null, responseWaitMs = 0;
 let heartbeatSequence = 0, waitingForUser = false;
+let historyRecords = [], historyChart = null;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -336,6 +337,133 @@ function initPicker() {
   grid.querySelectorAll('.scenario-card').forEach(card => {
     card.addEventListener('click', () => startScenario(card.dataset.id));
   });
+}
+
+const HISTORY_DEMO = [
+  { completed_at: Date.now() / 1000 - 35 * 86400, summary: { overall_score: 68, sub_scores: { pronunciation: 65, fluency: 62, grammar: 78, responsiveness: 72 } } },
+  { completed_at: Date.now() / 1000 - 28 * 86400, summary: { overall_score: 72, sub_scores: { pronunciation: 70, fluency: 68, grammar: 80, responsiveness: 75 } } },
+  { completed_at: Date.now() / 1000 - 21 * 86400, summary: { overall_score: 75, sub_scores: { pronunciation: 74, fluency: 71, grammar: 82, responsiveness: 78 } } },
+  { completed_at: Date.now() / 1000 - 14 * 86400, summary: { overall_score: 79, sub_scores: { pronunciation: 78, fluency: 76, grammar: 84, responsiveness: 82 } } },
+  { completed_at: Date.now() / 1000 - 7 * 86400, summary: { overall_score: 82, sub_scores: { pronunciation: 81, fluency: 80, grammar: 85, responsiveness: 84 } } },
+  { completed_at: Date.now() / 1000, summary: { overall_score: 86, sub_scores: { pronunciation: 85, fluency: 84, grammar: 88, responsiveness: 87 } } },
+];
+
+function historyMetricValue(record, metric) {
+  if (metric === 'overall') return record.summary.overall_score;
+  return record.summary.sub_scores[metric] ?? 0;
+}
+
+function formatHistoryDate(timestamp, includeTime = false) {
+  if (!timestamp) return '未记录';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    ...(includeTime ? { hour: '2-digit', minute: '2-digit' } : {}),
+  }).format(new Date(timestamp * 1000));
+}
+
+function renderHistoryChart(records, isDemo) {
+  const metric = document.getElementById('history-metric').value;
+  const labels = {
+    overall: '综合',
+    pronunciation: '发音',
+    fluency: '流利度',
+    grammar: '语法',
+    responsiveness: '反应速度',
+  };
+  const chronological = [...records].sort((a, b) => a.completed_at - b.completed_at);
+  if (historyChart) historyChart.destroy();
+  historyChart = new Chart(document.getElementById('history-chart'), {
+    type: 'line',
+    data: {
+      labels: chronological.map(item => formatHistoryDate(item.completed_at)),
+      datasets: [{
+        label: labels[metric],
+        data: chronological.map(item => historyMetricValue(item, metric)),
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37,99,235,.1)',
+        pointBackgroundColor: '#fff',
+        pointBorderColor: '#2563eb',
+        pointBorderWidth: 2,
+        pointRadius: 4,
+        tension: .28,
+        fill: true,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: context => `${labels[metric]} ${context.parsed.y}` } },
+      },
+      scales: {
+        y: { min: 0, max: 100, ticks: { stepSize: 20 }, grid: { color: '#eef0f2' } },
+        x: { grid: { display: false } },
+      },
+    },
+  });
+  document.getElementById('history-demo-badge').classList.toggle('hidden', !isDemo);
+}
+
+function renderHistory(records) {
+  const isDemo = records.length === 0;
+  const trendRecords = isDemo ? HISTORY_DEMO : records;
+  const scores = records.map(item => item.summary.overall_score);
+  const average = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : '—';
+  const best = scores.length ? Math.max(...scores) : '—';
+  const latest = scores.length ? scores[0] : '—';
+  const totalWait = records.reduce(
+    (sum, item) => sum + (item.summary.response_wait_total_ms || 0), 0,
+  );
+  document.getElementById('history-stats').innerHTML = `
+    <div class="history-stat"><div class="history-stat-label">已完成练习</div><div class="history-stat-value">${records.length}</div><div class="history-stat-note">累计课程</div></div>
+    <div class="history-stat"><div class="history-stat-label">平均分</div><div class="history-stat-value">${average}</div><div class="history-stat-note">综合表现</div></div>
+    <div class="history-stat"><div class="history-stat-label">最高分</div><div class="history-stat-value">${best}</div><div class="history-stat-note">个人最佳</div></div>
+    <div class="history-stat"><div class="history-stat-label">最近成绩</div><div class="history-stat-value">${latest}</div><div class="history-stat-note">总等待 ${(totalWait / 1000).toFixed(0)} 秒</div></div>`;
+
+  const list = document.getElementById('history-list');
+  if (isDemo) {
+    list.innerHTML = '<div class="history-empty">完成一次课程后，真实评分记录会显示在这里。</div>';
+  } else {
+    list.innerHTML = records.map(item => {
+      const sc = SCENARIO_DEFS[item.scenario];
+      const sub = item.summary.sub_scores;
+      const accent = item.dialect === 'en-gb' ? '英式' : '美式';
+      return `
+        <div class="history-row">
+          <div>
+            <div class="history-session-name">${sc ? `${sc.icon} ${sc.subtitle}` : item.scenario}</div>
+            <div class="history-meta">${accent} · ${item.difficulty}</div>
+          </div>
+          <div class="history-date">${formatHistoryDate(item.completed_at, true)}</div>
+          <div class="history-scores">
+            <span>发音 ${sub.pronunciation}</span>
+            <span>流利 ${sub.fluency}</span>
+            <span>语法 ${sub.grammar}</span>
+            <span>反应 ${sub.responsiveness}</span>
+          </div>
+          <div class="history-overall">${item.summary.overall_score}</div>
+        </div>`;
+    }).join('');
+  }
+  renderHistoryChart(trendRecords, isDemo);
+}
+
+async function openHistory() {
+  document.getElementById('picker').classList.add('hidden');
+  document.getElementById('history-view').classList.remove('hidden');
+  document.getElementById('history-list').innerHTML =
+    '<div class="history-empty">正在加载评分记录...</div>';
+  try {
+    const response = await fetch('/api/history');
+    if (!response.ok) throw new Error('history request failed');
+    historyRecords = await response.json();
+  } catch {
+    historyRecords = [];
+  }
+  renderHistory(historyRecords);
 }
 
 async function startScenario(scenarioId) {
@@ -802,6 +930,15 @@ document.getElementById('back-btn').addEventListener('click', () => {
   document.getElementById('summary-panel').classList.add('hidden');
   document.getElementById('session-view').classList.add('hidden');
   document.getElementById('picker').classList.remove('hidden');
+});
+
+document.getElementById('history-btn').addEventListener('click', openHistory);
+document.getElementById('history-back-btn').addEventListener('click', () => {
+  document.getElementById('history-view').classList.add('hidden');
+  document.getElementById('picker').classList.remove('hidden');
+});
+document.getElementById('history-metric').addEventListener('change', () => {
+  renderHistoryChart(historyRecords.length ? historyRecords : HISTORY_DEMO, !historyRecords.length);
 });
 
 // ── Finish / Summary ───────────────────────────────────────────────────────────

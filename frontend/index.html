@@ -11,6 +11,7 @@
 
 <!-- ── Scenario Picker ─────────────────────────── -->
 <div id="picker">
+  <button id="history-btn" title="查看评分历史">↗ 历史</button>
   <div class="picker-header">
     <h1>🎙 英语口语陪练</h1>
     <p>选择一个场景，开始练习</p>
@@ -27,6 +28,42 @@
     </fieldset>
   </div>
   <div id="scenario-grid"><!-- filled by JS --></div>
+</div>
+
+<!-- ── Score History ──────────────────────────── -->
+<div id="history-view" class="hidden">
+  <header id="history-header">
+    <button id="history-back-btn" title="返回场景">← 返回</button>
+    <div>
+      <h1>评分历史</h1>
+      <p id="history-subtitle">查看练习表现与进步趋势</p>
+    </div>
+  </header>
+  <div id="history-content">
+    <section id="history-stats"></section>
+    <section id="history-trend">
+      <div class="history-section-head">
+        <div>
+          <h2>成绩趋势</h2>
+          <span id="history-demo-badge" class="hidden">演示数据</span>
+        </div>
+        <select id="history-metric" aria-label="选择趋势指标">
+          <option value="overall">综合</option>
+          <option value="pronunciation">发音</option>
+          <option value="fluency">流利度</option>
+          <option value="grammar">语法</option>
+          <option value="responsiveness">反应速度</option>
+        </select>
+      </div>
+      <div class="history-chart-wrap">
+        <canvas id="history-chart"></canvas>
+      </div>
+    </section>
+    <section id="history-records">
+      <div class="history-section-head"><h2>练习记录</h2></div>
+      <div id="history-list"></div>
+    </section>
+  </div>
 </div>
 
 <!-- ── Session View ────────────────────────────── -->
