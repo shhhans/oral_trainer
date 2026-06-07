@@ -344,9 +344,34 @@ async function startScenario(scenarioId) {
   document.getElementById('session-view').classList.remove('hidden');
 
   // WebSocket
+  connectWs();
+}
+
+// 建立(或重建)主链路 WebSocket。会话状态由服务端 SQLite 持久化,
+// 同一 session_id 重连后可无缝继续,故断线时按需重连是安全的。
+function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/${sessionId}`);
   ws.onmessage = onServerMessage;
+  // 服务重启(如 dev --reload)、网络抖动都会触发 close;不在此重连,
+  // 留待下次发送时 ensureWsOpen 重连,避免会话结束后无谓重连。
+  ws.onclose = e => console.warn('WS closed', e.code, e.reason);
+  ws.onerror = () => console.warn('WS error');
+}
+
+// 确保 ws 处于 OPEN:已断开则重连并等待握手完成,超时/失败则 reject。
+function ensureWsOpen(timeoutMs = 4000) {
+  return new Promise((resolve, reject) => {
+    if (!sessionId) return reject(new Error('no active session'));
+    if (ws && ws.readyState === WebSocket.OPEN) return resolve();
+    // CLOSED/CLOSING/无连接 → 重建;CONNECTING → 复用,仅等待其 open
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      connectWs();
+    }
+    const timer = setTimeout(() => reject(new Error('ws connect timeout')), timeoutMs);
+    ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('ws error')); }, { once: true });
+  });
 }
 
 // ── Gap-fill interaction ────────────────────────────────────────────────────────
@@ -469,7 +494,13 @@ async function stopRec() {
   if (!text) { setStatus('没听清，请重试'); return; }
   addMessage(text, 'user');
   setStatus('等待回复…');
-  ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
+  // 连接可能在录音期间断开(服务重启/网络抖动),发送前保活并重连
+  try {
+    await ensureWsOpen();
+    ws.send(JSON.stringify({ type: 'turn', text, audio_b64: audioB64, stt_ms: sttMs }));
+  } catch {
+    setStatus('⚠️ 连接已断开,正在重连,请再说一次');
+  }
 }
 
 // ── Audio playback ───────────────────────────────────────────────────────────
