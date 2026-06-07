@@ -22,6 +22,7 @@ from app.services.tts import TtsService
 from app.services.pron import PronService
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+OPENING_LINE = "Welcome! What can I get for you today?"  # kept for backward compat
 
 # Pre-generated greeting audio keyed by session_id; popped on first use or session end.
 _greeting_cache: dict[str, bytes] = {}

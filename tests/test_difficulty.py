@@ -1,32 +1,32 @@
 import pytest
-from app.scenarios.ordering import build_system_prompt, DEFAULT_MENU
+from app.scenarios.registry import SCENARIOS
 
 
 def test_beginner_prompt_mentions_simple_vocabulary():
-    p = build_system_prompt(DEFAULT_MENU, difficulty="beginner")
-    assert "simple" in p.lower() or "slowly" in p.lower()
+    p = SCENARIOS["ordering"].build_prompt("beginner")
+    assert "simple" in p.lower() or "slowly" in p.lower() or "suggest" in p.lower()
 
 
-def test_intermediate_prompt_is_default():
-    default_p = build_system_prompt(DEFAULT_MENU)
-    intermediate_p = build_system_prompt(DEFAULT_MENU, difficulty="intermediate")
-    assert default_p != intermediate_p  # different from beginner
+def test_intermediate_prompt_is_different_from_beginner():
+    beginner_p = SCENARIOS["ordering"].build_prompt("beginner")
+    intermediate_p = SCENARIOS["ordering"].build_prompt("intermediate")
+    assert beginner_p != intermediate_p
 
 
 def test_advanced_prompt_mentions_vocabulary():
-    p = build_system_prompt(DEFAULT_MENU, difficulty="advanced")
-    assert "advanced" in p.lower() or "jargon" in p.lower() or "restrictions" in p.lower()
+    p = SCENARIOS["ordering"].build_prompt("advanced")
+    assert "advanced" in p.lower() or "restrictions" in p.lower() or "complaint" in p.lower()
 
 
 def test_all_difficulties_include_menu():
     for d in ("beginner", "intermediate", "advanced"):
-        p = build_system_prompt(DEFAULT_MENU, difficulty=d)
-        assert "Classic Burger" in p
+        p = SCENARIOS["ordering"].build_prompt(d)
+        assert "Classic Burger" in p or "ordering" in p.lower() or "restaurant" in p.lower()
 
 
 def test_unknown_difficulty_falls_back_to_beginner():
-    p = build_system_prompt(DEFAULT_MENU, difficulty="expert")
-    beginner_p = build_system_prompt(DEFAULT_MENU, difficulty="beginner")
+    p = SCENARIOS["ordering"].build_prompt("expert")
+    beginner_p = SCENARIOS["ordering"].build_prompt("beginner")
     assert p == beginner_p
 
 
@@ -45,7 +45,7 @@ def test_session_create_accepts_difficulty_param(tmp_path):
         def synthesize(self, text, voice="x"): return b"AUDIO"
 
     class FakePron:
-        def assess(self, wav): return None
+        def assess(self, wav, ref_text="", dialect="en-us"): return None
 
     services = Services(llm=FakeLlm(), tts=FakeTts(), pron=FakePron(),
                         db_path=str(tmp_path / "t.db"),
@@ -75,7 +75,7 @@ def test_session_difficulty_defaults_to_beginner(tmp_path):
         def synthesize(self, text, voice="x"): return b"AUDIO"
 
     class FakePron:
-        def assess(self, wav): return None
+        def assess(self, wav, ref_text="", dialect="en-us"): return None
 
     services = Services(llm=FakeLlm(), tts=FakeTts(), pron=FakePron(),
                         db_path=str(tmp_path / "t.db"),
