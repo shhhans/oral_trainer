@@ -24,6 +24,11 @@ from app.services.pron import PronService
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 MENU_PATH = os.path.join("resources", "menu.json")
 
+# Per-session pending hints from side-chain analysis.
+# Populated by _bg_analyze when a serious grammar error is detected;
+# consumed (and cleared) at the start of the next user turn.
+_pending_hints: dict[str, str] = {}
+
 
 @dataclass
 class Services:
@@ -81,12 +86,15 @@ def create_app(services: Services | None = None) -> FastAPI:
                     continue
 
                 user_text = (data.get("text") or "").strip()
+                # Consume any pending hint injected by the previous turn's side-chain analysis.
+                inline_hint = _pending_hints.pop(session_id, None)
                 timer = StepTimer()
                 # LLM/TTS 是同步 HTTP 调用(30-60s 超时),必须丢到 worker 线程,
                 # 否则会阻塞 event loop,卡住其它 WebSocket / 请求。
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
-                        dialogue.run_turn, session, user_text=user_text)
+                        dialogue.run_turn, session, user_text=user_text,
+                        inline_hint=inline_hint)
                     with timer.measure("tts"):
                         audio = await asyncio.to_thread(
                             services.tts.synthesize, turn.assistant_text)
@@ -157,8 +165,17 @@ def create_app(services: Services | None = None) -> FastAPI:
 
 async def _bg_analyze(turn, wav_bytes, services: Services, storage: Storage):
     # analyze_turn 内含同步发音/纠错 HTTP 调用,丢到 worker 线程避免阻塞 event loop
-    await asyncio.to_thread(
+    serious = await asyncio.to_thread(
         analyze_turn, turn, wav_bytes, services.pron, services.llm, storage)
+
+    if serious:
+        # Build a coaching hint for the LLM (instructs the assistant, not the user directly).
+        parts = [
+            f'用户说了"{c.original}"，语法问题：{c.explanation}（建议改为"{c.suggestion}"）'
+            for c in serious
+        ]
+        hint = "；".join(parts) + "。请在本轮回复中用自然方式轻轻点出，随后继续推进点餐流程。"
+        _pending_hints[turn.session_id] = hint
 
 
 # 模块级导出,支持 `uvicorn app.main:app` 直接启动
