@@ -13,6 +13,12 @@ class Settings:
     minimax_llm_model: str = os.getenv("MINIMAX_LLM_MODEL", "MiniMax-M2")
     minimax_tts_model: str = os.getenv("MINIMAX_TTS_MODEL", "speech-02-turbo")
     speechace_api_key: str = os.getenv("SPEECHACE_API_KEY", "")
+    # Dialect / accent settings
+    # MiniMax voice IDs — en-us default tested & confirmed working; en-gb is a named candidate
+    # (exact British voice IDs not publicly documented; update via MINIMAX_VOICE_EN_GB env var)
+    minimax_voice_en_us: str = os.getenv("MINIMAX_VOICE_EN_US", "English_Insightful_Speaker")
+    minimax_voice_en_gb: str = os.getenv("MINIMAX_VOICE_EN_GB", "English_Graceful_Lady")
+    speechace_dialect: str = os.getenv("SPEECHACE_DIALECT", "en-us")
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
 
