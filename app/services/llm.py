@@ -10,10 +10,12 @@ from app.models import LlmReply, Correction
 Transport = Callable[[list[dict], float], str]
 
 CHAT_SYSTEM_SUFFIX = (
-    "\n\n严格只输出 JSON,格式:"
-    '{"reply": "<你的英文对话回复>", '
-    '"inline_correction": "<仅当用户犯了严重/影响理解的错误时,给一句中文即时纠正提示,否则 null>", '
-    '"goal_reached": <用户是否已完成本场景目标,true/false>}'
+    "\n\n严格只输出 JSON，格式："
+    '{"reply": "<英文对话回复，自然简短，推动点餐流程>", '
+    '"inline_correction": "<只在用户的表达会让真实服务员完全听不懂、或指向错误菜品导致点错单时，'
+    "才输出一句中文提示（示例：'你说的 X 在菜单上没有，可能想说 Y？'）。"
+    "其余语法/用词小错一律 null，留给课后总结>，"
+    '"goal_reached": <顾客已确认完整订单则 true，否则 false>}'
 )
 
 CORRECT_PROMPT = (
