@@ -25,6 +25,7 @@ from app.services.pron import PronService
 from app.services.stt import DashscopeStreamingSession
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+DEFAULT_OPENING_AUDIO_URL = "/static/audio/ordering-opening-en-us.mp3"
 
 # Per-session pending hints from side-chain analysis.
 _pending_hints: dict[str, str] = {}
@@ -111,17 +112,24 @@ def create_app(services: Services | None = None) -> FastAPI:
         sid = uuid.uuid4().hex[:12]
         from app.services.tts import get_voice_for_dialect
         opening_line = SCENARIOS[scenario].opening_line
-        opening_audio = await asyncio.to_thread(
-            services.tts.synthesize,
-            opening_line,
-            get_voice_for_dialect(dialect),
-        )
+        opening_audio_b64 = None
+        opening_audio_url = None
+        if scenario == "ordering" and dialect == "en-us":
+            opening_audio_url = DEFAULT_OPENING_AUDIO_URL
+        else:
+            opening_audio = await asyncio.to_thread(
+                services.tts.synthesize,
+                opening_line,
+                get_voice_for_dialect(dialect),
+            )
+            opening_audio_b64 = base64.b64encode(opening_audio).decode()
         storage.save_session(Session(id=sid, scenario=scenario,
                                      dialect=dialect, difficulty=difficulty,
                                      created_at=time.time()))
         return {"id": sid, "scenario": scenario, "dialect": dialect, "difficulty": difficulty,
                 "opening_line": opening_line,
-                "opening_audio_b64": base64.b64encode(opening_audio).decode()}
+                "opening_audio_b64": opening_audio_b64,
+                "opening_audio_url": opening_audio_url}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):

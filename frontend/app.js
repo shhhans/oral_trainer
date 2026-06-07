@@ -304,7 +304,7 @@ probeAsrCapability();
 // 复用同一个 audio 元素:回复音频在 WebSocket 异步回调里播放,已脱离用户手势栈,
 // Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
 // 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
-let audioPlayer = null, audioPrimePromise = null, lastAudioB64 = null;
+let audioPlayer = null, audioPrimePromise = null, lastAudioSource = null;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -349,7 +349,8 @@ async function startScenario(scenarioId) {
   // Show opening line as first message
   const openingLine = data.opening_line || '';
   if (openingLine) addMessage(openingLine, 'opening');
-  if (data.opening_audio_b64) playAudio(data.opening_audio_b64);
+  if (data.opening_audio_url) playAudioSource(data.opening_audio_url);
+  else if (data.opening_audio_b64) playAudio(data.opening_audio_b64);
 
   // Switch views
   document.getElementById('picker').classList.add('hidden');
@@ -633,12 +634,16 @@ function primeAudio() {
 }
 
 function playAudio(b64) {
-  lastAudioB64 = b64;
+  playAudioSource('data:audio/mp3;base64,' + b64);
+}
+
+function playAudioSource(source) {
+  lastAudioSource = source;
   if (!audioPlayer) audioPlayer = new Audio();
   const ready = audioPrimePromise || Promise.resolve();
   ready.finally(() => {
     audioPlayer.muted = false;
-    audioPlayer.src = 'data:audio/mp3;base64,' + b64;
+    audioPlayer.src = source;
     audioPlayer.play().then(() => hideReplay()).catch(() => {
       // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
       setStatus('🔇 浏览器拦截了自动播放');
@@ -654,7 +659,7 @@ function showReplay() {
     btn.id = 'replay-btn';
     btn.textContent = '▶ 重播';
     btn.addEventListener('click', () => {
-      if (lastAudioB64) playAudio(lastAudioB64);
+      if (lastAudioSource) playAudioSource(lastAudioSource);
     });
     document.getElementById('controls').appendChild(btn);
   }

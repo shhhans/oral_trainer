@@ -71,9 +71,33 @@ def test_create_session_and_menu(tmp_path):
     body = r.json()
     assert "id" in body
     assert body["opening_line"]
+    assert synthesized == []
+    assert body["opening_audio_b64"] is None
+    assert body["opening_audio_url"] == "/static/audio/ordering-opening-en-us.mp3"
+    static_audio = client.get(body["opening_audio_url"])
+    assert static_audio.status_code == 200
+    assert len(static_audio.content) > 1000
+    assert client.get("/api/menu").status_code == 200
+
+
+def test_non_default_opening_still_uses_tts(tmp_path):
+    synthesized = []
+
+    class RecordingTts:
+        def synthesize(self, text, voice="x"):
+            synthesized.append(text)
+            return b"OPENING"
+
+    services = Services(llm=FakeLlm(), tts=RecordingTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"),
+                        audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
+
+    body = client.post("/api/session?scenario=hotel").json()
+
     assert synthesized == [body["opening_line"]]
     assert base64.b64decode(body["opening_audio_b64"]) == b"OPENING"
-    assert client.get("/api/menu").status_code == 200
+    assert body["opening_audio_url"] is None
 
 
 def test_websocket_turn_returns_reply_and_audio(tmp_path):
