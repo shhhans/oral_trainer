@@ -21,11 +21,16 @@ def test_assess_uses_transport():
         "speechace_score": {"pronunciation": 70},
         "fluency": {"overall_metrics": {"fluency_score": 70}},
         "word_score_list": []}}
-    svc = PronService(transport=lambda wav: raw)
-    pron = svc.assess(b"wavbytes")
+    svc = PronService(transport=lambda wav, text: raw)
+    pron = svc.assess(b"wavbytes", ref_text="hello world")
     assert pron.overall == 70
 
 
+def test_assess_returns_none_without_ref_text():
+    svc = PronService(transport=lambda wav, text: {})
+    assert svc.assess(b"wavbytes", ref_text="") is None
+
+
 def test_assess_handles_failure_status():
-    svc = PronService(transport=lambda wav: {"status": "error"})
-    assert svc.assess(b"x") is None
+    svc = PronService(transport=lambda wav, text: {"status": "error"})
+    assert svc.assess(b"x", ref_text="hi") is None

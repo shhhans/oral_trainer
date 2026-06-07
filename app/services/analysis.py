@@ -12,7 +12,7 @@ def grammar_score_from_corrections(avg_corrections: float) -> float:
 def analyze_turn(turn: Turn, wav_bytes: bytes | None, pron, llm, storage) -> Turn:
     """异步:发音测评 + 细颗粒纠错,回填并存回。pron/llm 为 service 实例。"""
     if wav_bytes is not None:
-        turn.pronunciation = pron.assess(wav_bytes)
+        turn.pronunciation = pron.assess(wav_bytes, ref_text=turn.user_transcript)
     turn.deferred_corrections = llm.correct(turn.user_transcript)
     storage.save_turn(turn)
     return turn

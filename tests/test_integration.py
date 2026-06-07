@@ -21,7 +21,7 @@ class FakeTts:
 
 
 class FakePron:
-    def assess(self, wav):
+    def assess(self, wav, ref_text=""):
         return Pronunciation(overall=82, accuracy=82, fluency=78,
                              words=[WordScore(word="latte", score=88)])
 

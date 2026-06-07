@@ -13,6 +13,8 @@ class Settings:
     minimax_llm_model: str = os.getenv("MINIMAX_LLM_MODEL", "MiniMax-M2")
     minimax_tts_model: str = os.getenv("MINIMAX_TTS_MODEL", "speech-02-turbo")
     speechace_api_key: str = os.getenv("SPEECHACE_API_KEY", "")
+    # AP-SE Singapore is the default; override for other regions (eu→api4, us→api.speechace.co)
+    speechace_base_url: str = os.getenv("SPEECHACE_BASE_URL", "https://api2.speechace.com")
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
 
