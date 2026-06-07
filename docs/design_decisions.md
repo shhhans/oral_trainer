@@ -215,7 +215,6 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 **Rationale**: Without a health endpoint, load balancers and CI pipelines have no way to verify the app is running and configured. The `keys_configured` field distinguishes a running-but-broken deploy (keys missing) from a healthy one without exposing key values.
 
 
-
 ---
 
 ## DD-09 — Startup API Key Warnings + Lazy env var reading in `get_settings()`
@@ -226,4 +225,15 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 **Rationale for (a)**: Silent failures when keys are absent produce cryptic HTTP 401/500 errors deep in a request. Warning at startup makes misconfiguration immediately visible in logs.
 
 **Rationale for (b)**: Python dataclass field defaults are evaluated at class-definition time (module import), so the original `str = os.getenv(...)` pattern captured env var values once and never updated them. Moving reads into `get_settings()` makes the function truly reflect the current environment, which also enables `pytest`'s `monkeypatch.setenv/delenv` to work correctly without module reloads.
+
+
+
+---
+
+## DD-10 — `GET /api/session/{id}/turns` Endpoint
+
+**Branch**: feat/turns-endpoint  
+**Decision**: Add a REST endpoint that returns all turns for a session as a JSON array, including user transcript, assistant text, pronunciation scores, corrections, and timings.
+
+**Rationale**: The existing `GET /api/session/{id}/summary` aggregates scores but discards per-turn detail. A frontend "review mode" or debugging workflow needs turn-by-turn data (e.g., which specific utterance had the low pronunciation score, what the assistant said at each step). The `Turn.model_dump()` serialization is already complete and includes all fields.
 
