@@ -45,6 +45,22 @@ class Turn(BaseModel):
     timings: Timings = Field(default_factory=Timings)
 
 
+class SessionMenuItem(BaseModel):
+    restaurant: str
+    section: str
+    name: str
+    description: str
+    price: str
+    course: str
+
+
+class TaskCard(BaseModel):
+    id: str
+    title: str
+    tasks: list[str] = Field(default_factory=list)
+    goal: str
+
+
 class Session(BaseModel):
     id: str
     scenario: str
@@ -53,6 +69,9 @@ class Session(BaseModel):
     status: str = "active"         # active | completed
     created_at: float
     completed_at: float | None = None
+    restaurant_name: str | None = None
+    menu_items: list[SessionMenuItem] = Field(default_factory=list)
+    task_card: TaskCard | None = None
     turns: list[Turn] = Field(default_factory=list)
 
 

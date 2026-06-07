@@ -57,6 +57,26 @@ def test_new_session_persists_dialect(tmp_path):
     assert loaded.dialect == "en-gb"
 
 
+def test_new_session_persists_sampled_content(tmp_path):
+    from app.models import Session, SessionMenuItem, TaskCard
+    import time
+    storage = Storage(db_path=str(tmp_path / "t.db"), audio_dir=str(tmp_path / "audio"))
+    item = SessionMenuItem(
+        restaurant="Test Cafe", section="Mains", name="Pasta",
+        description="Tomato sauce", price="$12.00", course="main")
+    card = TaskCard(
+        id="ordering-beginner-1", title="Mission",
+        tasks=["Order pasta"], goal="Order pasta")
+    storage.save_session(Session(
+        id="s1", scenario="ordering", created_at=time.time(),
+        restaurant_name="Test Cafe", menu_items=[item], task_card=card))
+
+    loaded = storage.get_session("s1")
+    assert loaded.restaurant_name == "Test Cafe"
+    assert loaded.menu_items == [item]
+    assert loaded.task_card == card
+
+
 def test_migration_adds_dialect_column(tmp_path):
     db = str(tmp_path / "legacy.db")
     _create_legacy_db(db)  # 旧库无 dialect 列

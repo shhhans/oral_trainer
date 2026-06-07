@@ -14,7 +14,7 @@ const SCENARIO_DEFS = {
       'Confirm your complete order',
     ],
     renderGuide: () => '<div class="menu-section"><h3>📋 Menu</h3><div id="menu-items"><p style="color:#9ca3af;font-size:.85rem">Loading…</p></div></div>',
-    afterRender: loadOrderingMenu,
+    afterRender: data => loadOrderingMenu(data.menu_items, data.restaurant_name),
   },
 
   hotel: {
@@ -179,20 +179,52 @@ const SCENARIO_DEFS = {
     ],
     renderGuide: renderPhoneGuide,
   },
+
+  volleyball: {
+    icon: '🏐', title: 'Volleyball Practice', subtitle: '排球协作',
+    desc: '在训练和比赛中呼球、确认轮转并与队友讨论战术',
+    badge: '进阶', badgeClass: 'badge-blue',
+    tasks: [
+      'Introduce yourself to the team',
+      'Ask which position you should play',
+      'Confirm one court instruction',
+    ],
+    renderGuide: () => `
+      <div class="mock-doc">
+        <div class="doc-header booking-header">
+          <span>🏐</span>
+          <div>
+            <div class="doc-brand">Team Practice</div>
+            <div class="doc-ref">3v3 pickup game</div>
+          </div>
+        </div>
+        <div class="doc-body">
+          <div class="doc-row"><span class="lbl">Your role</span><span class="val">New teammate</span></div>
+          <div class="doc-row"><span class="lbl">Focus</span><span class="val">Calls, rotation, tactics</span></div>
+          <div class="doc-divider"></div>
+          <div class="situation-label">Communicate clearly before and during each play.</div>
+        </div>
+      </div>`,
+  },
 };
 
 // ── Guide render functions ─────────────────────────────────────────────────────
 
-async function loadOrderingMenu() {
+async function loadOrderingMenu(sampledMenu, restaurantName) {
   try {
-    const menu = await (await fetch('/api/menu')).json();
-    document.getElementById('menu-items').innerHTML = menu.map(m => `
+    const menu = sampledMenu && sampledMenu.length
+      ? sampledMenu
+      : await (await fetch(`/api/menu?session_id=${sessionId}`)).json();
+    const heading = restaurantName
+      ? `<div class="menu-restaurant">${restaurantName}</div>`
+      : '';
+    document.getElementById('menu-items').innerHTML = heading + menu.map(m => `
       <div class="menu-item">
         <div class="menu-item-top">
           <span class="menu-item-name">${m.name}</span>
           <span class="menu-item-price">${m.price}</span>
         </div>
-        <div class="menu-item-desc">${m.desc}</div>
+        <div class="menu-item-desc">${m.course ? `${m.course} · ` : ''}${m.description || m.desc || ''}</div>
       </div>`).join('');
   } catch {
     document.getElementById('menu-items').textContent = 'Menu unavailable';
@@ -287,6 +319,10 @@ function renderPhoneGuide() {
 let sessionId = null, currentScenario = null, ws = null;
 const storedDialect = localStorage.getItem('oral-trainer-dialect');
 let selectedDialect = ['en-us', 'en-gb'].includes(storedDialect) ? storedDialect : 'en-us';
+const storedDifficulty = localStorage.getItem('oral-trainer-difficulty');
+let selectedDifficulty = ['beginner', 'intermediate', 'advanced'].includes(storedDifficulty)
+  ? storedDifficulty
+  : 'beginner';
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
 let micStream = null;  // 共享的 getUserMedia 流:MediaRecorder(发音评分)与 ASR 采集复用
@@ -310,6 +346,7 @@ let audioPlayer = null, audioPrimePromise = null, lastAudioSource = null;
 let idleTimer = null, idleStartedAt = null, responseWaitMs = 0;
 let heartbeatSequence = 0, waitingForUser = false;
 let historyRecords = [], historyChart = null;
+let finishing = false;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -322,6 +359,17 @@ function initPicker() {
       if (!input.checked) return;
       selectedDialect = input.value;
       localStorage.setItem('oral-trainer-dialect', selectedDialect);
+    });
+  });
+  const difficultyInput = document.querySelector(
+    `input[name="difficulty"][value="${selectedDifficulty}"]`,
+  );
+  if (difficultyInput) difficultyInput.checked = true;
+  document.querySelectorAll('input[name="difficulty"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      selectedDifficulty = input.value;
+      localStorage.setItem('oral-trainer-difficulty', selectedDifficulty);
     });
   });
 
@@ -475,6 +523,7 @@ async function startScenario(scenarioId) {
   const params = new URLSearchParams({
     scenario: scenarioId,
     dialect: selectedDialect,
+    difficulty: selectedDifficulty,
   });
   const res = await fetch(`/api/session?${params}`, { method: 'POST' });
   const data = await res.json();
@@ -482,17 +531,22 @@ async function startScenario(scenarioId) {
 
   // Render guide
   document.getElementById('guide-content').innerHTML = currentScenario.renderGuide();
-  if (currentScenario.afterRender) await currentScenario.afterRender();
+  if (currentScenario.afterRender) await currentScenario.afterRender(data);
   enableGapFills();
 
   // Render task list
-  renderTaskList(currentScenario.tasks);
+  renderTaskList(data.task_card?.tasks || currentScenario.tasks);
 
   // Update header
   document.getElementById('session-title').textContent =
     `${currentScenario.icon} ${currentScenario.subtitle}`;
   const badge = document.getElementById('session-badge');
-  badge.textContent = currentScenario.badge;
+  const difficultyLabels = {
+    beginner: 'Beginner',
+    intermediate: 'Intermediate',
+    advanced: 'Advanced',
+  };
+  badge.textContent = difficultyLabels[data.difficulty] || currentScenario.badge;
   badge.className = `sc-badge ${currentScenario.badgeClass}`;
 
   // Show opening line as first message
@@ -914,8 +968,9 @@ function onServerMessage(ev) {
   });
   if (m.goal_reached) {
     waitingForUser = false;
-    setStatus('🎉 场景完成！可以结束课程了');
+    setStatus('场景完成，正在生成总结…');
     checkLastTask();
+    playback.finally(() => finishSession());
   }
 }
 
@@ -943,9 +998,12 @@ document.getElementById('history-metric').addEventListener('change', () => {
 
 // ── Finish / Summary ───────────────────────────────────────────────────────────
 
-document.getElementById('finish-btn').addEventListener('click', async () => {
+document.getElementById('finish-btn').addEventListener('click', finishSession);
+
+async function finishSession() {
   resetIdleTracking();
-  if (!sessionId) return;
+  if (!sessionId || finishing) return;
+  finishing = true;
   document.getElementById('finish-btn').disabled = true;
   setStatus('生成总结中…');
   try {
@@ -955,9 +1013,10 @@ document.getElementById('finish-btn').addEventListener('click', async () => {
     setStatus('总结生成失败');
   } finally {
     document.getElementById('finish-btn').disabled = false;
+    finishing = false;
     setStatus('');
   }
-});
+}
 
 function renderSummary(s) {
   document.getElementById('summary-panel').classList.remove('hidden');

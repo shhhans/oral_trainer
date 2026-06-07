@@ -15,6 +15,7 @@ from app.config import get_settings, warn_missing_keys
 from app.models import Session
 from app.storage import Storage
 from app.scenarios.registry import SCENARIOS
+from app.scenarios.base import ScenarioProp
 from app.services.dialogue import DialogueService
 from app.services.analysis import analyze_turn, build_summary
 from app.services.timing import StepTimer, aggregate_timings
@@ -23,6 +24,7 @@ from app.services.llm import LlmService
 from app.services.tts import TtsService
 from app.services.pron import PronService
 from app.services.stt import DashscopeStreamingSession
+from app.services.session_content import sample_menu, sample_task_card
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 DEFAULT_OPENING_AUDIO_URL = "/static/audio/ordering-opening-en-us.mp3"
@@ -58,13 +60,27 @@ def default_services() -> Services:
 def create_app(services: Services | None = None) -> FastAPI:
     services = services or default_services()
     storage = Storage(db_path=services.db_path, audio_dir=services.audio_dir)
-    # Pre-compute system prompts for all scenarios × all difficulty levels
-    _prompts: dict[str, dict[str, str]] = {
-        sid: {d: sc.build_prompt(d) for d in ("beginner", "intermediate", "advanced")}
-        for sid, sc in SCENARIOS.items()
-    }
-    default_prompt = _prompts["ordering"]["beginner"]
+    # DialogueService keeps a fallback; each turn supplies session-specific context.
+    default_prompt = SCENARIOS["ordering"].build_prompt("beginner")
     dialogue = DialogueService(llm=services.llm, storage=storage, system_prompt=default_prompt)
+
+    def prompt_for_session(session: Session) -> str:
+        scenario = SCENARIOS.get(session.scenario, SCENARIOS["ordering"])
+        props = scenario.props
+        if session.menu_items:
+            menu = "\n".join(
+                f"{item.course}: {item.name} ({item.price}) - {item.description}"
+                for item in session.menu_items
+            )
+            props = [
+                ScenarioProp("Restaurant", session.restaurant_name or "Restaurant"),
+                ScenarioProp("Available menu", menu),
+            ]
+        goal = scenario.goal_description
+        if session.task_card:
+            goal = f"{goal}\nSession mission: {session.task_card.goal}"
+        return scenario.build_prompt(
+            session.difficulty, props=props, goal_description=goal)
 
     app = FastAPI()
     if os.path.isdir(FRONTEND_DIR):
@@ -97,7 +113,16 @@ def create_app(services: Services | None = None) -> FastAPI:
         ]
 
     @app.get("/api/menu")
-    def get_menu():
+    def get_menu(session_id: str | None = None):
+        if session_id:
+            session = storage.get_session(session_id)
+            if session is None:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            if session.menu_items:
+                return [
+                    {**item.model_dump(), "desc": item.description}
+                    for item in session.menu_items
+                ]
         from app.scenarios.ordering import DEFAULT_MENU
         return [{"name": m.name, "price": m.price, "desc": m.desc} for m in DEFAULT_MENU]
 
@@ -119,6 +144,11 @@ def create_app(services: Services | None = None) -> FastAPI:
         if scenario not in SCENARIOS:
             return JSONResponse({"error": f"Unknown scenario: {scenario}"}, status_code=422)
         sid = uuid.uuid4().hex[:12]
+        task_card = sample_task_card(scenario, difficulty, sid)
+        restaurant_name = None
+        menu_items = []
+        if scenario == "ordering":
+            restaurant_name, menu_items = sample_menu(difficulty, sid)
         from app.services.tts import get_voice_for_dialect
         opening_line = SCENARIOS[scenario].opening_line
         opening_audio_b64 = None
@@ -132,13 +162,17 @@ def create_app(services: Services | None = None) -> FastAPI:
                 get_voice_for_dialect(dialect),
             )
             opening_audio_b64 = base64.b64encode(opening_audio).decode()
-        storage.save_session(Session(id=sid, scenario=scenario,
-                                     dialect=dialect, difficulty=difficulty,
-                                     created_at=time.time()))
+        storage.save_session(Session(
+            id=sid, scenario=scenario, dialect=dialect, difficulty=difficulty,
+            created_at=time.time(), restaurant_name=restaurant_name,
+            menu_items=menu_items, task_card=task_card))
         return {"id": sid, "scenario": scenario, "dialect": dialect, "difficulty": difficulty,
                 "opening_line": opening_line,
                 "opening_audio_b64": opening_audio_b64,
-                "opening_audio_url": opening_audio_url}
+                "opening_audio_url": opening_audio_url,
+                "restaurant_name": restaurant_name,
+                "menu_items": [item.model_dump() for item in menu_items],
+                "task_card": task_card.model_dump()}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
@@ -177,8 +211,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                 user_text = (data.get("text") or "").strip()
                 inline_hint = _pending_hints.pop(session_id, None)
                 timer = StepTimer()
-                sp = _prompts.get(session.scenario, _prompts["ordering"]).get(
-                    session.difficulty, default_prompt)
+                sp = prompt_for_session(session)
                 with timer.measure("total"):
                     turn = await asyncio.to_thread(
                         dialogue.run_turn, session, user_text=user_text,

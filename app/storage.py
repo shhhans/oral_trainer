@@ -1,6 +1,7 @@
 """SQLite 持久化 + 本地音频文件。session/summary 各一行;turn 以 (session_id, index) 唯一,JSON 存整模型。"""
 import os
 import sqlite3
+import json
 from app.models import Session, Turn, Summary
 
 
@@ -22,7 +23,8 @@ class Storage:
             c.execute("""CREATE TABLE IF NOT EXISTS sessions(
                 id TEXT PRIMARY KEY, scenario TEXT,
                 dialect TEXT DEFAULT 'en-us', difficulty TEXT DEFAULT 'beginner',
-                status TEXT, created_at REAL, completed_at REAL)""")
+                status TEXT, created_at REAL, completed_at REAL,
+                restaurant_name TEXT, menu_json TEXT, task_json TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS turns(
                 session_id TEXT, idx INTEGER, data TEXT,
                 PRIMARY KEY(session_id, idx))""")
@@ -36,6 +38,9 @@ class Storage:
         migrations = [
             "ALTER TABLE sessions ADD COLUMN difficulty TEXT DEFAULT 'beginner'",
             "ALTER TABLE sessions ADD COLUMN dialect TEXT DEFAULT 'en-us'",
+            "ALTER TABLE sessions ADD COLUMN restaurant_name TEXT",
+            "ALTER TABLE sessions ADD COLUMN menu_json TEXT",
+            "ALTER TABLE sessions ADD COLUMN task_json TEXT",
         ]
         for sql in migrations:
             try:
@@ -45,13 +50,21 @@ class Storage:
 
     def save_session(self, s: Session) -> None:
         with self._conn() as c:
-            c.execute("""INSERT INTO sessions(id, scenario, dialect, difficulty, status, created_at, completed_at)
-                VALUES(?,?,?,?,?,?,?)
+            c.execute("""INSERT INTO sessions(
+                    id, scenario, dialect, difficulty, status, created_at, completed_at,
+                    restaurant_name, menu_json, task_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET status=excluded.status,
                     dialect=excluded.dialect,
                     difficulty=excluded.difficulty,
-                    completed_at=excluded.completed_at""",
-                (s.id, s.scenario, s.dialect, s.difficulty, s.status, s.created_at, s.completed_at))
+                    completed_at=excluded.completed_at,
+                    restaurant_name=excluded.restaurant_name,
+                    menu_json=excluded.menu_json,
+                    task_json=excluded.task_json""",
+                (s.id, s.scenario, s.dialect, s.difficulty, s.status,
+                 s.created_at, s.completed_at, s.restaurant_name,
+                 json.dumps([item.model_dump() for item in s.menu_items]),
+                 s.task_card.model_dump_json() if s.task_card else None))
 
     def save_turn(self, t: Turn) -> None:
         with self._conn() as c:
@@ -73,7 +86,10 @@ class Storage:
                     dialect=row["dialect"] if "dialect" in keys else "en-us",
                     difficulty=row["difficulty"] if "difficulty" in keys else "beginner",
                     status=row["status"],
-                    created_at=row["created_at"], completed_at=row["completed_at"])
+                    created_at=row["created_at"], completed_at=row["completed_at"],
+                    restaurant_name=row["restaurant_name"] if "restaurant_name" in keys else None,
+                    menu_items=json.loads(row["menu_json"] or "[]") if "menu_json" in keys else [],
+                    task_card=json.loads(row["task_json"]) if "task_json" in keys and row["task_json"] else None)
         s.turns = [Turn.model_validate_json(r["data"]) for r in turn_rows]
         return s
 

@@ -19,8 +19,14 @@ class ScenarioConfig:
     base_role: str
     difficulty_notes: dict[str, str] = field(default_factory=dict)
 
-    def build_prompt(self, difficulty: str = "beginner") -> str:
-        props_text = "\n".join(f"- {p.name}: {p.detail}" for p in self.props)
+    def build_prompt(
+        self,
+        difficulty: str = "beginner",
+        props: list[ScenarioProp] | None = None,
+        goal_description: str | None = None,
+    ) -> str:
+        active_props = self.props if props is None else props
+        props_text = "\n".join(f"- {p.name}: {p.detail}" for p in active_props)
         diff_note = self.difficulty_notes.get(difficulty, self.difficulty_notes.get("beginner", ""))
         parts = [self.base_role]
         if diff_note:
@@ -28,5 +34,6 @@ class ScenarioConfig:
         parts.append("Speak natural, simple English. Keep replies short (1-2 sentences) so the conversation flows.")
         if props_text:
             parts.append(f"Context:\n{props_text}")
-        parts.append(f"Goal: {self.goal_description} When the goal is reached, set goal_reached=true and close warmly.")
+        goal = goal_description or self.goal_description
+        parts.append(f"Goal: {goal} When the goal is reached, set goal_reached=true and close warmly.")
         return "\n".join(parts)

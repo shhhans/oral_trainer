@@ -19,7 +19,8 @@ https://github.com/user-attachments/assets/2765b5ee-9200-4085-b79b-e74e3f40e516
 - **空闲追问**：助手说完后每等待 5 秒自动追问，直到用户开始录音。
 - **量化评分**：综合分、发音、流利度、语法、反应速度、词级发音和链路耗时。
 - **评分历史**：History 页面展示真实课程记录、统计指标和可切换的趋势曲线；无记录时展示明确标注的演示曲线。
-- **多难度后端参数**：会话支持 `beginner/intermediate/advanced`，难度会持久化并影响场景提示词。
+- **三级难度与任务卡**：前端可选择 `beginner/intermediate/advanced`；每场会按难度抽取 3/4/5 项任务，并将目标注入场景提示词。
+- **分层菜单抽样**：点餐场景按难度展示 8/12/16 道菜，每次从同一家餐厅抽取并确保覆盖前菜、主菜、甜点和饮料。
 - **菜单数据 ETL**：可将 Kaggle CC0 的 Restaurant Menu Items 数据集清洗为带 `course` 分类的菜单目录。
 
 ## 系统链路
@@ -82,7 +83,7 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-浏览器打开 `http://localhost:8000`。选择口音与场景后，按住录音按钮或空格键开始说话。
+浏览器打开 `http://localhost:8000`。选择口音、难度与场景后，按住录音按钮或空格键开始说话。
 
 ## 环境变量
 
@@ -121,7 +122,7 @@ ETL 会清理无效记录、标准化价格、去重，并将菜单项分类为�
 
 | 端点 | 用途 |
 |------|------|
-| `POST /api/session` | 创建会话，支持 `scenario`、`dialect`、`difficulty` |
+| `POST /api/session` | 创建会话并返回抽样任务卡及菜单，支持 `scenario`、`dialect`、`difficulty` |
 | `WS /ws/{session_id}` | 对话、TTS 和空闲追问协议 |
 | `WS /ws/asr/{session_id}` | 实时 ASR PCM 流 |
 | `POST /api/session/{id}/finish` | 结束课程并生成总结 |
@@ -144,4 +145,4 @@ node --check frontend\app.js
 - 浏览器需要支持 `AudioWorklet`、`MediaRecorder` 和 WebSocket。
 - 发音测评的 WebM 转 WAV 依赖 ffmpeg；未安装时对话仍可运行，但发音评分可能跳过。
 - 当前为按住说话模式，尚未实现连续 VAD。
-- 菜单 ETL 数据已就绪；按难度进行菜单分层抽样和任务卡抽样仍待接入运行时会话。
+- 菜单与任务卡在创建会话时完成抽样并持久化，因此刷新或 WebSocket 重连不会改变本场目标。
