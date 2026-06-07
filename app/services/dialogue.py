@@ -2,6 +2,7 @@
 inline_hint 是副链路可随时推入的"即时纠错指令",拼进 system prompt 让 LLM 自然轻点。
 TTS 不在此处,由 main.py 调用以便单独计时与回传。"""
 import uuid
+from app.config import get_settings
 from app.models import Session, Turn, Timings
 from app.services.timing import StepTimer
 
@@ -13,8 +14,13 @@ class DialogueService:
         self.system_prompt = system_prompt
 
     def _history(self, session: Session) -> list[dict]:
+        turns = session.turns
+        window = get_settings().dialogue_history_window
+        # For long sessions keep turn[0] (opening context) + last (window-1) turns.
+        if len(turns) > window:
+            turns = [turns[0]] + turns[-(window - 1):]
         history: list[dict] = []
-        for t in session.turns:
+        for t in turns:
             history.append({"role": "user", "content": t.user_transcript})
             history.append({"role": "assistant", "content": t.assistant_text})
         return history

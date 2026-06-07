@@ -187,3 +187,19 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 **Rationale**: TTS synthesis adds ~500ms latency to every turn. The opening line is fixed and predictable, so it can be synthesized speculatively during the time the user opens their microphone. The cache pop on first use ensures the pre-generated audio is never replayed accidentally on subsequent turns.
 
 **Alternatives considered**: Pre-generate every assistant turn speculatively — too wasteful and often wrong. Streaming TTS — larger refactor; see DD-07 aspirations. Client-side caching — requires frontend change.
+
+---
+
+## DD-07 — Dialogue History Truncation
+
+**Branch**: feat/history-truncation  
+**Decision**: Cap the history sent to the LLM at `DIALOGUE_HISTORY_WINDOW` turns (default 8). For sessions exceeding the window, always include `turns[0]` (opening context that sets the scenario) plus the last `window-1` turns.
+
+**Implementation**:
+- `DIALOGUE_HISTORY_WINDOW` env var added to `config.py` (default `8`)
+- `DialogueService._history()` applies truncation: `[turns[0]] + turns[-(window-1):]` when `len(turns) > window`
+- Result: at most `window * 2` messages passed to the LLM
+
+**Rationale**: Full history grows linearly with session length, wasting tokens and increasing latency for long sessions. Keeping `turns[0]` preserves the scenario opening (e.g. the user's initial order context), while the recent window maintains conversational coherence. 8 turns covers typical ordering sessions end-to-end.
+
+**Alternatives considered**: Summarize old turns — adds LLM call overhead. Rolling window without anchor — risks losing scenario context. Fixed 8-turn limit — chosen; configurable via env var.

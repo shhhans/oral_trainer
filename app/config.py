@@ -21,6 +21,7 @@ class Settings:
     speechace_dialect: str = os.getenv("SPEECHACE_DIALECT", "en-us")
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     data_dir: str = os.getenv("DATA_DIR", "data")
+    dialogue_history_window: int = int(os.getenv("DIALOGUE_HISTORY_WINDOW", "8"))
 
 
 def get_settings() -> Settings:
