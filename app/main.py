@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import BackgroundTasks, FastAPI, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from app.config import get_settings
+from app.config import get_settings, warn_missing_keys
 from app.models import Session
 from app.storage import Storage
 from app.scenarios.ordering import load_menu_or_default, build_system_prompt
@@ -45,6 +45,7 @@ class Services:
 
 def default_services() -> Services:
     s = get_settings()
+    warn_missing_keys()
     return Services(llm=LlmService(), tts=TtsService(), pron=PronService(),
                     db_path=os.path.join(s.data_dir, "app.db"),
                     audio_dir=os.path.join(s.data_dir, "audio"))
