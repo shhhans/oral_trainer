@@ -190,8 +190,16 @@ def create_app(services: Services | None = None) -> FastAPI:
 
         # partial 在 SDK 线程产生,放进线程安全队列,由 async 侧统一回传,避免跨线程 asyncio 调度。
         partials: queue.Queue = queue.Queue()
-        sess = DashscopeStreamingSession(
-            on_partial=partials.put, recognizer_factory=services.asr_factory)
+        try:
+            sess = await asyncio.to_thread(
+                DashscopeStreamingSession,
+                partials.put,
+                services.asr_factory,
+            )
+        except Exception:  # noqa: BLE001
+            await ws.send_json({"type": "error"})
+            await ws.close()
+            return
         await ws.send_json({"type": "ready"})
 
         async def drain_partials():
