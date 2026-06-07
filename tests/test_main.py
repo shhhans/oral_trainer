@@ -40,6 +40,20 @@ def test_health_endpoint(tmp_path):
     assert "speechace" in body["keys_configured"]
 
 
+def test_list_sessions(tmp_path):
+    client = make_client(tmp_path)
+    # No sessions yet
+    assert client.get("/api/sessions").json() == []
+    # Create two sessions
+    client.post("/api/session")
+    client.post("/api/session")
+    sessions = client.get("/api/sessions").json()
+    assert len(sessions) == 2
+    assert all("id" in s and "status" in s for s in sessions)
+    # limit param
+    assert len(client.get("/api/sessions?limit=1").json()) == 1
+
+
 def test_create_session_and_menu(tmp_path):
     client = make_client(tmp_path)
     r = client.post("/api/session")

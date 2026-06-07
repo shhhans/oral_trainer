@@ -246,3 +246,13 @@ Session 携带 `dialect` 字段，TTS voice 和 SpeechAce 评分方言均随之�
 
 **Rationale**: The original formula zeroed 80% of the overall score when pronunciation was simply uncollected — unfairly penalizing users. The fix distinguishes "no pronunciation data" (skip pron/fluency from weighting) from "pronunciation scored zero" (include in weighting). Sub-scores still report 0.0 for transparency.
 
+---
+
+## DD-12 — `GET /api/sessions` Session List Endpoint
+
+**Branch**: feat/session-listing
+
+**Decision**: `GET /api/sessions?limit=50` returns all sessions ordered by `created_at DESC` with basic metadata (id, scenario, status, created_at, completed_at). Turns are not included (avoiding N+1 load). `Storage.list_sessions(limit)` queries the sessions table directly.
+
+**Rationale**: Any real history UI needs to enumerate past sessions. Without this, clients would need to guess session IDs. The limit parameter prevents accidentally loading very large databases.
+
