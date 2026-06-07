@@ -285,6 +285,8 @@ function renderPhoneGuide() {
 // ── State ──────────────────────────────────────────────────────────────────────
 
 let sessionId = null, currentScenario = null, ws = null;
+const storedDialect = localStorage.getItem('oral-trainer-dialect');
+let selectedDialect = ['en-us', 'en-gb'].includes(storedDialect) ? storedDialect : 'en-us';
 let mediaRecorder = null, chunks = [], recording = false;
 let sttStart = 0, recognizing = '';
 let micStream = null;  // 共享的 getUserMedia 流:MediaRecorder(发音评分)与 ASR 采集复用
@@ -308,6 +310,18 @@ let audioPlayer = null, audioPrimePromise = null, lastAudioSource = null;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
+  const dialectInput = document.querySelector(
+    `input[name="dialect"][value="${selectedDialect}"]`,
+  );
+  if (dialectInput) dialectInput.checked = true;
+  document.querySelectorAll('input[name="dialect"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      selectedDialect = input.value;
+      localStorage.setItem('oral-trainer-dialect', selectedDialect);
+    });
+  });
+
   const grid = document.getElementById('scenario-grid');
   grid.innerHTML = Object.entries(SCENARIO_DEFS).map(([id, sc]) => `
     <div class="scenario-card" data-id="${id}">
@@ -327,7 +341,11 @@ async function startScenario(scenarioId) {
   currentScenario = SCENARIO_DEFS[scenarioId];
 
   // Create session on server
-  const res = await fetch(`/api/session?scenario=${scenarioId}`, { method: 'POST' });
+  const params = new URLSearchParams({
+    scenario: scenarioId,
+    dialect: selectedDialect,
+  });
+  const res = await fetch(`/api/session?${params}`, { method: 'POST' });
   const data = await res.json();
   sessionId = data.id;
 

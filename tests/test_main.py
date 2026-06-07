@@ -85,7 +85,7 @@ def test_non_default_opening_still_uses_tts(tmp_path):
 
     class RecordingTts:
         def synthesize(self, text, voice="x"):
-            synthesized.append(text)
+            synthesized.append((text, voice))
             return b"OPENING"
 
     services = Services(llm=FakeLlm(), tts=RecordingTts(), pron=FakePron(),
@@ -95,8 +95,29 @@ def test_non_default_opening_still_uses_tts(tmp_path):
 
     body = client.post("/api/session?scenario=hotel").json()
 
-    assert synthesized == [body["opening_line"]]
+    assert synthesized[0][0] == body["opening_line"]
     assert base64.b64decode(body["opening_audio_b64"]) == b"OPENING"
+    assert body["opening_audio_url"] is None
+
+
+def test_session_create_uses_selected_british_voice(tmp_path, monkeypatch):
+    synthesized = []
+    monkeypatch.setenv("MINIMAX_VOICE_EN_GB", "british-test-voice")
+
+    class RecordingTts:
+        def synthesize(self, text, voice="x"):
+            synthesized.append((text, voice))
+            return b"OPENING"
+
+    services = Services(llm=FakeLlm(), tts=RecordingTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"),
+                        audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
+
+    body = client.post("/api/session?scenario=ordering&dialect=en-gb").json()
+
+    assert body["dialect"] == "en-gb"
+    assert synthesized == [(body["opening_line"], "british-test-voice")]
     assert body["opening_audio_url"] is None
 
 

@@ -14,6 +14,17 @@
   <div class="picker-header">
     <h1>🎙 英语口语陪练</h1>
     <p>选择一个场景，开始练习</p>
+    <fieldset id="dialect-picker">
+      <legend>发音偏好</legend>
+      <label>
+        <input type="radio" name="dialect" value="en-us" checked />
+        <span>美式</span>
+      </label>
+      <label>
+        <input type="radio" name="dialect" value="en-gb" />
+        <span>英式</span>
+      </label>
+    </fieldset>
   </div>
   <div id="scenario-grid"><!-- filled by JS --></div>
 </div>
