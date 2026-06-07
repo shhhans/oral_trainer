@@ -304,7 +304,7 @@ probeAsrCapability();
 // 复用同一个 audio 元素:回复音频在 WebSocket 异步回调里播放,已脱离用户手势栈,
 // Chrome 自动播放策略可能拦截。startRec 时(用户手势内)先 prime 解锁该元素,
 // 后续 play 才不会被静默拦截。lastAudioB64 留作"重播"回退用。
-let audioPlayer = null, lastAudioB64 = null;
+let audioPlayer = null, audioPrimePromise = null, lastAudioB64 = null;
 // ── Scenario Picker ────────────────────────────────────────────────────────────
 
 function initPicker() {
@@ -323,6 +323,7 @@ function initPicker() {
 }
 
 async function startScenario(scenarioId) {
+  primeAudio();
   currentScenario = SCENARIO_DEFS[scenarioId];
 
   // Create session on server
@@ -348,6 +349,7 @@ async function startScenario(scenarioId) {
   // Show opening line as first message
   const openingLine = data.opening_line || '';
   if (openingLine) addMessage(openingLine, 'opening');
+  if (data.opening_audio_b64) playAudio(data.opening_audio_b64);
 
   // Switch views
   document.getElementById('picker').classList.add('hidden');
@@ -599,25 +601,49 @@ async function stopAsrStream() {
 // 在用户手势内"解锁"播放元素:静音播一下再暂停,使后续异步 play 不被自动播放策略拦截。
 function primeAudio() {
   if (!audioPlayer) audioPlayer = new Audio();
-  if (audioPlayer.dataset.primed) return;
+  if (audioPrimePromise) return audioPrimePromise;
+  const sampleRate = 8000;
+  const samples = new Uint8Array(sampleRate / 10).fill(128);
+  const wav = new ArrayBuffer(44 + samples.length);
+  const view = new DataView(wav);
+  const write = (offset, text) => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  write(0, 'RIFF'); view.setUint32(4, 36 + samples.length, true);
+  write(8, 'WAVEfmt '); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate, true);
+  view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+  write(36, 'data'); view.setUint32(40, samples.length, true);
+  new Uint8Array(wav, 44).set(samples);
+
   audioPlayer.muted = true;
-  audioPlayer.play().then(() => {
+  const unlockUrl = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+  audioPlayer.src = unlockUrl;
+  audioPrimePromise = audioPlayer.play().then(() => {
     audioPlayer.pause();
     audioPlayer.currentTime = 0;
     audioPlayer.muted = false;
-    audioPlayer.dataset.primed = '1';
-  }).catch(() => {});  // prime 失败不影响录音流程,真正播放时还有重播回退兜底
+  }).catch(() => {
+    audioPlayer.muted = false;
+  }).finally(() => {
+    URL.revokeObjectURL(unlockUrl);
+  });
+  return audioPrimePromise;
 }
 
 function playAudio(b64) {
   lastAudioB64 = b64;
   if (!audioPlayer) audioPlayer = new Audio();
-  audioPlayer.muted = false;
-  audioPlayer.src = 'data:audio/mp3;base64,' + b64;
-  audioPlayer.play().then(() => hideReplay()).catch(() => {
-    // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
-    setStatus('🔇 浏览器拦截了自动播放');
-    showReplay();
+  const ready = audioPrimePromise || Promise.resolve();
+  ready.finally(() => {
+    audioPlayer.muted = false;
+    audioPlayer.src = 'data:audio/mp3;base64,' + b64;
+    audioPlayer.play().then(() => hideReplay()).catch(() => {
+      // 自动播放被拦截:不静默失败,显式提示并给出手动重播(点击是新手势,必定可播)。
+      setStatus('🔇 浏览器拦截了自动播放');
+      showReplay();
+    });
   });
 }
 

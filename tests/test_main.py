@@ -55,10 +55,24 @@ def test_list_sessions(tmp_path):
 
 
 def test_create_session_and_menu(tmp_path):
-    client = make_client(tmp_path)
+    synthesized = []
+
+    class RecordingTts:
+        def synthesize(self, text, voice="x"):
+            synthesized.append(text)
+            return b"OPENING"
+
+    services = Services(llm=FakeLlm(), tts=RecordingTts(), pron=FakePron(),
+                        db_path=str(tmp_path / "t.db"),
+                        audio_dir=str(tmp_path / "audio"))
+    client = TestClient(create_app(services=services))
     r = client.post("/api/session")
     assert r.status_code == 200
-    assert "id" in r.json()
+    body = r.json()
+    assert "id" in body
+    assert body["opening_line"]
+    assert synthesized == [body["opening_line"]]
+    assert base64.b64decode(body["opening_audio_b64"]) == b"OPENING"
     assert client.get("/api/menu").status_code == 200
 
 

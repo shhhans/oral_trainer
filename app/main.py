@@ -109,11 +109,19 @@ def create_app(services: Services | None = None) -> FastAPI:
         if scenario not in SCENARIOS:
             return JSONResponse({"error": f"Unknown scenario: {scenario}"}, status_code=422)
         sid = uuid.uuid4().hex[:12]
+        from app.services.tts import get_voice_for_dialect
+        opening_line = SCENARIOS[scenario].opening_line
+        opening_audio = await asyncio.to_thread(
+            services.tts.synthesize,
+            opening_line,
+            get_voice_for_dialect(dialect),
+        )
         storage.save_session(Session(id=sid, scenario=scenario,
                                      dialect=dialect, difficulty=difficulty,
                                      created_at=time.time()))
         return {"id": sid, "scenario": scenario, "dialect": dialect, "difficulty": difficulty,
-                "opening_line": SCENARIOS[scenario].opening_line}
+                "opening_line": opening_line,
+                "opening_audio_b64": base64.b64encode(opening_audio).decode()}
 
     @app.websocket("/ws/{session_id}")
     async def ws_turn(ws: WebSocket, session_id: str):
